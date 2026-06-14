@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
+import mapboxgl, { type Map as MapboxMap } from 'mapbox-gl'
+import 'mapbox-gl/dist/mapbox-gl.css'
 
 import {
   createControlPoint,
@@ -27,6 +29,11 @@ const imageCanvas = ref<HTMLDivElement | null>(null)
 const imageScale = ref(1)
 const imagePan = reactive({ x: 0, y: 0 })
 const imageMouse = ref<{ x: number; y: number } | null>(null)
+const mapContainer = ref<HTMLDivElement | null>(null)
+const map = shallowRef<MapboxMap | null>(null)
+const mapMouse = ref<{ longitude: number; latitude: number } | null>(null)
+const mapStyle = ref<'osm' | 'tdt-vector' | 'tdt-image'>('osm')
+const mapRevision = ref(0)
 const imageDrag = ref<{
   startClientX: number
   startClientY: number
@@ -40,6 +47,8 @@ const form = reactive({
   longitude: 0,
   latitude: 0,
 })
+
+const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN as string | undefined
 
 const projectId = computed(() => String(route.params.id))
 const selectedPoint = computed(() => points.value.find((point) => point.id === selectedId.value) ?? null)
@@ -71,6 +80,50 @@ const rms = computed(() => {
   if (!values.length) return null
   return Math.sqrt(values.reduce((sum, point) => sum + Number(point.residual) ** 2, 0) / values.length)
 })
+const mapStyles = computed(() => ({
+  osm: {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors',
+      },
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+  },
+  'tdt-vector': {
+    version: 8,
+    sources: {
+      tdtVector: {
+        type: 'raster',
+        tiles: [
+          `https://t0.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=${tiandituToken ?? ''}`,
+          `https://t1.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=${tiandituToken ?? ''}`,
+        ],
+        tileSize: 256,
+        attribution: '© 天地图',
+      },
+    },
+    layers: [{ id: 'tdtVector', type: 'raster', source: 'tdtVector' }],
+  },
+  'tdt-image': {
+    version: 8,
+    sources: {
+      tdtImage: {
+        type: 'raster',
+        tiles: [
+          `https://t0.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=${tiandituToken ?? ''}`,
+          `https://t1.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=${tiandituToken ?? ''}`,
+        ],
+        tileSize: 256,
+        attribution: '© 天地图',
+      },
+    },
+    layers: [{ id: 'tdtImage', type: 'raster', source: 'tdtImage' }],
+  },
+}))
 
 async function load() {
   loading.value = true
@@ -85,10 +138,76 @@ async function load() {
     if (!selectedId.value && points.value[0]) selectedId.value = points.value[0].id
     await nextTick()
     fitImage()
+    fitMapToPoints()
   } catch {
     error.value = '工作台数据加载失败。'
   } finally {
     loading.value = false
+  }
+}
+
+function initMap() {
+  if (!mapContainer.value || map.value) return
+
+  mapboxgl.accessToken = 'not-required-for-raster-sources'
+  map.value = new mapboxgl.Map({
+    container: mapContainer.value,
+    style: mapStyles.value.osm as mapboxgl.StyleSpecification,
+    center: [105, 35],
+    zoom: 3,
+    attributionControl: false,
+  })
+  map.value.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
+  map.value.on('mousemove', (event) => {
+    mapMouse.value = {
+      longitude: Number(event.lngLat.lng.toFixed(6)),
+      latitude: Number(event.lngLat.lat.toFixed(6)),
+    }
+  })
+  map.value.on('move', () => {
+    mapRevision.value += 1
+  })
+  map.value.on('mouseleave', () => {
+    mapMouse.value = null
+  })
+  map.value.on('click', (event) => {
+    form.longitude = Number(event.lngLat.lng.toFixed(6))
+    form.latitude = Number(event.lngLat.lat.toFixed(6))
+    message.value = `已选取地图坐标：${form.longitude}, ${form.latitude}。`
+  })
+}
+
+function switchMapStyle(style: 'osm' | 'tdt-vector' | 'tdt-image') {
+  if (style !== 'osm' && !tiandituToken) {
+    error.value = '天地图底图需要配置 VITE_TIANDITU_TOKEN。'
+    return
+  }
+  mapStyle.value = style
+  map.value?.setStyle(mapStyles.value[style] as mapboxgl.StyleSpecification)
+}
+
+function fitMapToPoints() {
+  const enabled = points.value.filter((point) => point.enabled)
+  if (!map.value || enabled.length === 0) return
+
+  const bounds = new mapboxgl.LngLatBounds()
+  enabled.forEach((point) => bounds.extend([point.longitude, point.latitude]))
+  if (enabled.length === 1) {
+    map.value.flyTo({ center: [enabled[0].longitude, enabled[0].latitude], zoom: 10 })
+  } else {
+    map.value.fitBounds(bounds, { padding: 80, maxZoom: 14 })
+  }
+}
+
+function mapPointToCanvas(point: ControlPoint) {
+  mapRevision.value
+  if (!map.value) {
+    return { left: '-999px', top: '-999px' }
+  }
+  const position = map.value.project([point.longitude, point.latitude])
+  return {
+    left: `${position.x}px`,
+    top: `${position.y}px`,
   }
 }
 
@@ -187,6 +306,7 @@ async function addPoint() {
     points.value.push(response.data)
     selectedId.value = response.data.id
     message.value = '控制点已新增。'
+    fitMapToPoints()
   } catch {
     error.value = '控制点新增失败，请检查坐标范围。'
   }
@@ -195,12 +315,14 @@ async function addPoint() {
 async function togglePoint(point: ControlPoint) {
   const response = await updateControlPoint(point.id, { enabled: !point.enabled })
   points.value = points.value.map((item) => (item.id === point.id ? response.data : item))
+  fitMapToPoints()
 }
 
 async function removePoint(point: ControlPoint) {
   await deleteControlPoint(point.id)
   points.value = points.value.filter((item) => item.id !== point.id)
   if (selectedId.value === point.id) selectedId.value = points.value[0]?.id ?? ''
+  fitMapToPoints()
 }
 
 async function executeGeoref() {
@@ -220,6 +342,23 @@ async function executeGeoref() {
     running.value = false
   }
 }
+
+onMounted(async () => {
+  await load()
+  await nextTick()
+  initMap()
+  fitMapToPoints()
+})
+
+onBeforeUnmount(() => {
+  map.value?.remove()
+  map.value = null
+})
+
+watch(selectedPoint, (point) => {
+  if (!point || !map.value) return
+  map.value.easeTo({ center: [point.longitude, point.latitude], duration: 300 })
+})
 </script>
 
 <template>
@@ -328,20 +467,43 @@ async function executeGeoref() {
             </div>
           </div>
           <div class="win">
-            <div class="win-head"><span class="t"><SvgIcon name="map" :size="15" />地图窗口</span></div>
+            <div class="win-head">
+              <span class="t"><SvgIcon name="map" :size="15" />地图窗口</span>
+              <div class="segmented map-segment">
+                <button :class="{ active: mapStyle === 'osm' }" @click="switchMapStyle('osm')">OSM</button>
+                <button
+                  :class="{ active: mapStyle === 'tdt-vector' }"
+                  :title="tiandituToken ? '天地图矢量' : '需配置 VITE_TIANDITU_TOKEN'"
+                  @click="switchMapStyle('tdt-vector')"
+                >
+                  天地图矢量
+                </button>
+                <button
+                  :class="{ active: mapStyle === 'tdt-image' }"
+                  :title="tiandituToken ? '天地图影像' : '需配置 VITE_TIANDITU_TOKEN'"
+                  @click="switchMapStyle('tdt-image')"
+                >
+                  天地图影像
+                </button>
+              </div>
+            </div>
             <div class="win-canvas canvas-map">
+              <div ref="mapContainer" class="mapbox-host"></div>
               <button
                 v-for="(point, index) in points"
                 :key="`map-${point.id}`"
                 class="gcp"
                 :class="{ sel: selectedId === point.id, disabled: !point.enabled }"
-                :style="{ left: `${20 + (index % 5) * 13}%`, top: `${28 + Math.floor(index / 5) * 16}%` }"
+                :style="mapPointToCanvas(point)"
                 @click="selectedId = point.id"
               >
                 <span class="ring"></span><span class="lbl">{{ index + 1 }}</span>
               </button>
-              <span class="zoom-badge">z 8</span>
-              <span class="coord-badge">LL {{ selectedPoint?.longitude ?? '-' }} / {{ selectedPoint?.latitude ?? '-' }}</span>
+              <span class="zoom-badge">{{ mapStyle === 'osm' ? 'OSM' : '天地图' }}</span>
+              <span class="coord-badge">
+                LL {{ mapMouse?.longitude ?? selectedPoint?.longitude ?? '-' }} /
+                {{ mapMouse?.latitude ?? selectedPoint?.latitude ?? '-' }}
+              </span>
             </div>
           </div>
         </div>
@@ -350,6 +512,7 @@ async function executeGeoref() {
           <span>启用 <b>{{ enabledCount }}</b></span>
           <span>RMS <b>{{ formatNumber(rms, 6) }}</b></span>
           <span>鼠标像素 <b>{{ imageMouse ? `${imageMouse.x}, ${imageMouse.y}` : '-' }}</b></span>
+          <span>地图坐标 <b>{{ mapMouse ? `${mapMouse.longitude}, ${mapMouse.latitude}` : '-' }}</b></span>
           <span class="mode">{{ loading ? '加载中' : imageDrag ? '图片平移' : '新增控制点模式' }}</span>
         </div>
       </section>
@@ -519,6 +682,13 @@ async function executeGeoref() {
   display: flex;
   gap: 4px;
 }
+.map-segment {
+  margin-left: auto;
+}
+.map-segment button {
+  padding: 5px 8px;
+  font-size: 11px;
+}
 .tbtn.mini {
   width: 30px;
   height: 28px;
@@ -556,10 +726,16 @@ async function executeGeoref() {
 }
 .canvas-map {
   background-color: #0a1410;
-  background-image:
-    linear-gradient(rgba(124, 255, 107, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(124, 255, 107, 0.05) 1px, transparent 1px);
-  background-size: 40px 40px;
+}
+.mapbox-host {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.canvas-map .gcp,
+.canvas-map .zoom-badge,
+.canvas-map .coord-badge {
+  z-index: 3;
 }
 .gcp {
   position: absolute;
