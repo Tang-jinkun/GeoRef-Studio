@@ -30,6 +30,9 @@ class ProjectRead(BaseModel):
     image_id: UUID
     image_path: str
     status: str
+    transform_matrix: list[list[float]] | None = None
+    rms_error: float | None = None
+    georef_time: datetime | None = None
     create_time: datetime
     update_time: datetime
     image: ImageFileRead | None = None

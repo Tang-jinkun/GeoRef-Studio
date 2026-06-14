@@ -2,7 +2,9 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import DateTime
+from sqlalchemy import Float
 from sqlalchemy import ForeignKey
+from sqlalchemy import JSON
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import func
@@ -27,6 +29,9 @@ class Project(Base):
     )
     image_path: Mapped[str] = mapped_column(String(1024), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="未配准")
+    transform_matrix: Mapped[list[list[float]] | None] = mapped_column(JSON)
+    rms_error: Mapped[float | None] = mapped_column(Float)
+    georef_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     create_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -40,4 +45,8 @@ class Project(Base):
     )
 
     image = relationship("ImageFile", back_populates="projects")
-
+    control_points = relationship(
+        "ControlPoint",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
