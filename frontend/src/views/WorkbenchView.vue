@@ -56,6 +56,14 @@ const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN as string | undefined
 const projectId = computed(() => String(route.params.id))
 const selectedPoint = computed(() => points.value.find((point) => point.id === selectedId.value) ?? null)
 const enabledCount = computed(() => points.value.filter((point) => point.enabled).length)
+const canPreview = computed(() => Boolean(project.value?.transform_matrix || preview.value))
+const sortedPoints = computed(() =>
+  [...points.value].sort((left, right) => {
+    const leftResidual = left.residual ?? Number.POSITIVE_INFINITY
+    const rightResidual = right.residual ?? Number.POSITIVE_INFINITY
+    return leftResidual - rightResidual
+  }),
+)
 const imageSize = computed(() => ({
   width: project.value?.image?.width ?? 0,
   height: project.value?.image?.height ?? 0,
@@ -223,6 +231,21 @@ function renderPreviewLayer() {
   })
 }
 
+function invalidatePreview() {
+  preview.value = null
+  previewVisible.value = false
+  if (project.value) {
+    project.value = {
+      ...project.value,
+      status: '未配准',
+      transform_matrix: null,
+      rms_error: null,
+      georef_time: null,
+    }
+  }
+  renderPreviewLayer()
+}
+
 function updatePreviewOpacity() {
   map.value?.setPaintProperty('georef-preview-layer', 'raster-opacity', previewOpacity.value)
 }
@@ -256,6 +279,10 @@ function togglePreview() {
   }
   previewVisible.value = !previewVisible.value
   renderPreviewLayer()
+}
+
+function pointNumber(point: ControlPoint) {
+  return points.value.findIndex((item) => item.id === point.id) + 1
 }
 
 function fitMapToPoints() {
@@ -378,6 +405,7 @@ async function addPoint() {
     points.value.push(response.data)
     selectedId.value = response.data.id
     message.value = '控制点已新增。'
+    invalidatePreview()
     fitMapToPoints()
   } catch {
     error.value = '控制点新增失败，请检查坐标范围。'
@@ -387,6 +415,7 @@ async function addPoint() {
 async function togglePoint(point: ControlPoint) {
   const response = await updateControlPoint(point.id, { enabled: !point.enabled })
   points.value = points.value.map((item) => (item.id === point.id ? response.data : item))
+  invalidatePreview()
   fitMapToPoints()
 }
 
@@ -394,6 +423,7 @@ async function removePoint(point: ControlPoint) {
   await deleteControlPoint(point.id)
   points.value = points.value.filter((item) => item.id !== point.id)
   if (selectedId.value === point.id) selectedId.value = points.value[0]?.id ?? ''
+  invalidatePreview()
   fitMapToPoints()
 }
 
@@ -457,7 +487,7 @@ watch(previewOpacity, () => {
       <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < 3" @click="executeGeoref">
         <SvgIcon name="play" :size="15" />{{ running ? '执行中' : '执行配准' }}
       </button>
-      <button class="btn btn-ghost btn-sm" :disabled="!project?.rms_error && !preview" @click="togglePreview">
+      <button class="btn btn-ghost btn-sm" :disabled="!canPreview" @click="togglePreview">
         <SvgIcon name="eye" :size="15" />{{ previewVisible ? '隐藏预览' : '预览' }}
       </button>
       <RouterLink class="btn btn-ghost btn-sm" :to="`/projects/${projectId}/export`">
@@ -513,9 +543,9 @@ watch(previewOpacity, () => {
               @mouseleave="leaveImageCanvas(); stopImagePan()"
               @wheel="handleImageWheel"
             >
-              <div
-                v-if="project?.image"
-                class="image-stage"
+            <div
+              v-if="project?.image"
+              class="image-stage"
                 :style="{
                   width: `${fittedImage.width}px`,
                   height: `${fittedImage.height}px`,
@@ -528,6 +558,10 @@ watch(previewOpacity, () => {
                   :alt="project.image.original_name"
                   draggable="false"
                 />
+              </div>
+              <div v-if="previewVisible" class="preview-frame">
+                <span>预览边界</span>
+                <span class="mono">{{ preview?.coordinates.length ?? 0 }} 顶点</span>
               </div>
               <button
                 v-for="(point, index) in points"
@@ -624,7 +658,7 @@ watch(previewOpacity, () => {
         </div>
         <div v-else class="gcp-list">
           <div
-            v-for="(point, index) in points"
+            v-for="(point, index) in sortedPoints"
             :key="point.id"
             class="gcp-item"
             :class="{ sel: selectedId === point.id, off: !point.enabled }"
@@ -806,6 +840,21 @@ watch(previewOpacity, () => {
   transform-origin: 0 0;
   border: 1px solid color-mix(in oklab, var(--accent), transparent 70%);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.12);
+}
+.preview-frame {
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in oklab, var(--accent), transparent 55%);
+  border-radius: var(--radius-pill);
+  background: color-mix(in oklab, var(--surface), transparent 12%);
+  font-size: 10px;
+  color: var(--fg-2);
 }
 .work-image {
   display: block;
