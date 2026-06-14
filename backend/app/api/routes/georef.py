@@ -9,8 +9,10 @@ from app.schemas.common import ApiResponse
 from app.schemas.control_point import ControlPointRead
 from app.schemas.georef import GeorefRunRequest
 from app.schemas.georef import GeorefRunResult
+from app.schemas.georef import GeorefPreviewResult
 from app.schemas.georef import RmsResult
 from app.services.georef_service import MIN_CONTROL_POINT_COUNT
+from app.services.georef_service import get_preview
 from app.services.georef_service import get_rms
 from app.services.georef_service import run_georef
 
@@ -50,5 +52,21 @@ def get_rms_endpoint(
             control_points=[
                 ControlPointRead.model_validate(point) for point in control_points
             ],
+        )
+    )
+
+
+@router.get("/preview", response_model=ApiResponse[GeorefPreviewResult])
+def get_preview_endpoint(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> ApiResponse[GeorefPreviewResult]:
+    project, coordinates = get_preview(db, project_id)
+    return ApiResponse(
+        data=GeorefPreviewResult(
+            project_id=project.id,
+            image_id=project.image_id,
+            image_url=f"/api/image/{project.image_id}/file",
+            coordinates=coordinates,
         )
     )

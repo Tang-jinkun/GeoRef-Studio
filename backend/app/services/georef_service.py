@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
 
 from app.gis.affine import AffinePoint
 from app.gis.affine import fit_affine_transform
@@ -15,7 +16,9 @@ MIN_CONTROL_POINT_COUNT = 3
 
 
 def _get_project_or_404(db: Session, project_id: UUID) -> Project:
-    project = db.get(Project, project_id)
+    project = db.scalars(
+        select(Project).options(joinedload(Project.image)).where(Project.id == project_id)
+    ).first()
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
@@ -79,3 +82,27 @@ def get_rms(db: Session, project_id: UUID) -> tuple[Project, list[ControlPoint],
     control_points = _list_project_control_points(db, project.id)
     enabled_count = len([point for point in control_points if point.enabled])
     return project, control_points, enabled_count
+
+
+def _transform_pixel(matrix: list[list[float]], pixel_x: float, pixel_y: float) -> list[float]:
+    longitude = matrix[0][0] * pixel_x + matrix[0][1] * pixel_y + matrix[0][2]
+    latitude = matrix[1][0] * pixel_x + matrix[1][1] * pixel_y + matrix[1][2]
+    return [float(longitude), float(latitude)]
+
+
+def get_preview(db: Session, project_id: UUID) -> tuple[Project, list[list[float]]]:
+    project = _get_project_or_404(db, project_id)
+    if not project.transform_matrix:
+        raise HTTPException(status_code=400, detail="Project is not georeferenced")
+    if project.image is None:
+        raise HTTPException(status_code=404, detail="Project image not found")
+
+    width = project.image.width
+    height = project.image.height
+    coordinates = [
+        _transform_pixel(project.transform_matrix, 0, 0),
+        _transform_pixel(project.transform_matrix, width, 0),
+        _transform_pixel(project.transform_matrix, width, height),
+        _transform_pixel(project.transform_matrix, 0, height),
+    ]
+    return project, coordinates

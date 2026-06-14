@@ -11,7 +11,7 @@ import {
   updateControlPoint,
   type ControlPoint,
 } from '@/api/controlPoints'
-import { getRms, runGeoref } from '@/api/georef'
+import { getGeorefPreview, getRms, runGeoref, type GeorefPreviewResult } from '@/api/georef'
 import { imageFileUrl } from '@/api/images'
 import { getProject, type Project } from '@/api/projects'
 import SvgIcon from '@/components/SvgIcon.vue'
@@ -34,6 +34,9 @@ const map = shallowRef<MapboxMap | null>(null)
 const mapMouse = ref<{ longitude: number; latitude: number } | null>(null)
 const mapStyle = ref<'osm' | 'tdt-vector' | 'tdt-image'>('osm')
 const mapRevision = ref(0)
+const preview = ref<GeorefPreviewResult | null>(null)
+const previewVisible = ref(false)
+const previewOpacity = ref(0.65)
 const imageDrag = ref<{
   startClientX: number
   startClientY: number
@@ -175,6 +178,9 @@ function initMap() {
     form.latitude = Number(event.lngLat.lat.toFixed(6))
     message.value = `已选取地图坐标：${form.longitude}, ${form.latitude}。`
   })
+  map.value.on('style.load', () => {
+    renderPreviewLayer()
+  })
 }
 
 function switchMapStyle(style: 'osm' | 'tdt-vector' | 'tdt-image') {
@@ -184,6 +190,72 @@ function switchMapStyle(style: 'osm' | 'tdt-vector' | 'tdt-image') {
   }
   mapStyle.value = style
   map.value?.setStyle(mapStyles.value[style] as mapboxgl.StyleSpecification)
+}
+
+function absoluteImageUrl(path: string) {
+  if (path.startsWith('http')) return path
+  return `${window.location.origin}${path}`
+}
+
+function renderPreviewLayer() {
+  if (!map.value) return
+
+  if (map.value.getLayer('georef-preview-layer')) {
+    map.value.removeLayer('georef-preview-layer')
+  }
+  if (map.value.getSource('georef-preview-source')) {
+    map.value.removeSource('georef-preview-source')
+  }
+  if (!preview.value || !previewVisible.value) return
+
+  map.value.addSource('georef-preview-source', {
+    type: 'image',
+    url: absoluteImageUrl(preview.value.image_url),
+    coordinates: preview.value.coordinates,
+  })
+  map.value.addLayer({
+    id: 'georef-preview-layer',
+    type: 'raster',
+    source: 'georef-preview-source',
+    paint: {
+      'raster-opacity': previewOpacity.value,
+    },
+  })
+}
+
+function updatePreviewOpacity() {
+  map.value?.setPaintProperty('georef-preview-layer', 'raster-opacity', previewOpacity.value)
+}
+
+function fitMapToPreview() {
+  if (!map.value || !preview.value) return
+  const bounds = new mapboxgl.LngLatBounds()
+  preview.value.coordinates.forEach((coord) => bounds.extend(coord))
+  map.value.fitBounds(bounds, { padding: 80, maxZoom: 14 })
+}
+
+async function loadPreview() {
+  error.value = ''
+  try {
+    const response = await getGeorefPreview(projectId.value)
+    preview.value = response.data
+    previewOpacity.value = response.data.opacity
+    previewVisible.value = true
+    renderPreviewLayer()
+    fitMapToPreview()
+    message.value = '配准预览已叠加到地图。'
+  } catch {
+    error.value = '预览生成失败，请先执行配准。'
+  }
+}
+
+function togglePreview() {
+  if (!preview.value) {
+    void loadPreview()
+    return
+  }
+  previewVisible.value = !previewVisible.value
+  renderPreviewLayer()
 }
 
 function fitMapToPoints() {
@@ -336,6 +408,7 @@ async function executeGeoref() {
     points.value = rmsResponse.data.control_points
     message.value = `配准完成，RMS = ${formatNumber(response.data.rms, 6)}。`
     await load()
+    await loadPreview()
   } catch {
     error.value = '配准失败，至少需要 3 个启用控制点。'
   } finally {
@@ -359,6 +432,10 @@ watch(selectedPoint, (point) => {
   if (!point || !map.value) return
   map.value.easeTo({ center: [point.longitude, point.latitude], duration: 300 })
 })
+
+watch(previewOpacity, () => {
+  updatePreviewOpacity()
+})
 </script>
 
 <template>
@@ -379,6 +456,9 @@ watch(selectedPoint, (point) => {
       <button class="tbtn active" title="新增控制点"><SvgIcon name="pin" :size="18" /></button>
       <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < 3" @click="executeGeoref">
         <SvgIcon name="play" :size="15" />{{ running ? '执行中' : '执行配准' }}
+      </button>
+      <button class="btn btn-ghost btn-sm" :disabled="!project?.rms_error && !preview" @click="togglePreview">
+        <SvgIcon name="eye" :size="15" />{{ previewVisible ? '隐藏预览' : '预览' }}
       </button>
       <RouterLink class="btn btn-ghost btn-sm" :to="`/projects/${projectId}/export`">
         <SvgIcon name="download" :size="15" />导出
@@ -504,6 +584,18 @@ watch(selectedPoint, (point) => {
                 LL {{ mapMouse?.longitude ?? selectedPoint?.longitude ?? '-' }} /
                 {{ mapMouse?.latitude ?? selectedPoint?.latitude ?? '-' }}
               </span>
+              <div v-if="preview" class="preview-ctl">
+                <button class="btn btn-ghost btn-sm" @click="togglePreview">
+                  <SvgIcon :name="previewVisible ? 'eye' : 'image'" :size="15" />
+                  {{ previewVisible ? '隐藏' : '显示' }}
+                </button>
+                <div class="slider">
+                  <span>透明度</span>
+                  <input v-model.number="previewOpacity" type="range" min="0" max="1" step="0.05" />
+                  <span class="mono">{{ Math.round(previewOpacity * 100) }}%</span>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="fitMapToPreview">定位</button>
+              </div>
             </div>
           </div>
         </div>
@@ -736,6 +828,33 @@ watch(selectedPoint, (point) => {
 .canvas-map .zoom-badge,
 .canvas-map .coord-badge {
   z-index: 3;
+}
+.preview-ctl {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 40px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  background: color-mix(in oklab, var(--surface), transparent 6%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-raised);
+}
+.preview-ctl .slider {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.preview-ctl input[type='range'] {
+  flex: 1;
+  min-width: 80px;
 }
 .gcp {
   position: absolute;

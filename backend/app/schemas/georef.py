@@ -22,3 +22,11 @@ class RmsResult(BaseModel):
     enabled_control_point_count: int
     minimum_required_count: int = 3
     control_points: list[ControlPointRead]
+
+
+class GeorefPreviewResult(BaseModel):
+    project_id: UUID
+    image_id: UUID
+    image_url: str
+    coordinates: list[list[float]]
+    opacity: float = 0.65

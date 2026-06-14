@@ -17,6 +17,14 @@ export type RmsResult = {
   control_points: ControlPoint[]
 }
 
+export type GeorefPreviewResult = {
+  project_id: string
+  image_id: string
+  image_url: string
+  coordinates: [[number, number], [number, number], [number, number], [number, number]]
+  opacity: number
+}
+
 export async function runGeoref(projectId: string) {
   const response = await http.post<ApiResponse<GeorefRunResult>>('/georef/run', {
     project_id: projectId,
@@ -26,6 +34,13 @@ export async function runGeoref(projectId: string) {
 
 export async function getRms(projectId: string) {
   const response = await http.get<ApiResponse<RmsResult>>('/georef/rms', {
+    params: { project_id: projectId },
+  })
+  return response.data
+}
+
+export async function getGeorefPreview(projectId: string) {
+  const response = await http.get<ApiResponse<GeorefPreviewResult>>('/georef/preview', {
     params: { project_id: projectId },
   })
   return response.data
