@@ -37,3 +37,8 @@ export async function getProject(projectId: string) {
   const response = await http.get<ApiResponse<Project>>(`/project/${projectId}`)
   return response.data
 }
+
+export async function deleteProject(projectId: string) {
+  const response = await http.delete<ApiResponse<{ deleted: boolean }>>(`/project/${projectId}`)
+  return response.data
+}

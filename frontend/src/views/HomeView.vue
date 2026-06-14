@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
-import { listProjects, type Project } from '@/api/projects'
+import { deleteProject, listProjects, type Project } from '@/api/projects'
 import AppBar from '@/components/AppBar.vue'
 import SvgIcon from '@/components/SvgIcon.vue'
 import { formatDate, statusBadgeClass } from '@/utils/format'
@@ -31,6 +31,18 @@ async function loadProjects() {
     error.value = '无法获取工程列表，请检查后端服务。'
   } finally {
     loading.value = false
+  }
+}
+
+async function removeProject(project: Project) {
+  const confirmed = window.confirm(`确认删除工程「${project.name}」？此操作会删除控制点和导出成果。`)
+  if (!confirmed) return
+
+  try {
+    await deleteProject(project.id)
+    projects.value = projects.value.filter((item) => item.id !== project.id)
+  } catch {
+    error.value = '工程删除失败。'
   }
 }
 
@@ -141,6 +153,13 @@ onMounted(() => {
                   >
                     <SvgIcon name="download" :size="15" />
                   </RouterLink>
+                  <button
+                    class="btn btn-ghost btn-sm btn-icon btn-danger"
+                    title="删除"
+                    @click="removeProject(project)"
+                  >
+                    <SvgIcon name="trash" :size="15" />
+                  </button>
                 </div>
               </td>
             </tr>

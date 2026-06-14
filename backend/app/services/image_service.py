@@ -26,6 +26,21 @@ def _validate_extension(filename: str) -> str:
     return "jpg" if suffix == "jpeg" else suffix
 
 
+def get_image_file(db: Session, image_id) -> ImageFile:
+    image_file = db.get(ImageFile, image_id)
+    if image_file is None:
+        raise HTTPException(status_code=404, detail="Image file not found")
+    return image_file
+
+
+def get_image_file_path(db: Session, image_id) -> Path:
+    image_file = get_image_file(db, image_id)
+    path = Path(image_file.storage_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Stored image file not found")
+    return path
+
+
 async def save_uploaded_image(db: Session, file: UploadFile) -> ImageFile:
     original_name = file.filename or "upload"
     extension = _validate_extension(original_name)
@@ -61,4 +76,3 @@ async def save_uploaded_image(db: Session, file: UploadFile) -> ImageFile:
     db.commit()
     db.refresh(image_file)
     return image_file
-

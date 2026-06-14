@@ -24,3 +24,7 @@ export async function uploadImage(file: File) {
   return response.data
 }
 
+export function imageFileUrl(imageId: string) {
+  const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '/api'
+  return `${baseUrl}/image/${imageId}/file`
+}

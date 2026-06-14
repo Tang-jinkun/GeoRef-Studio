@@ -10,6 +10,7 @@ import {
   type ControlPoint,
 } from '@/api/controlPoints'
 import { getRms, runGeoref } from '@/api/georef'
+import { imageFileUrl } from '@/api/images'
 import { getProject, type Project } from '@/api/projects'
 import SvgIcon from '@/components/SvgIcon.vue'
 import { formatNumber } from '@/utils/format'
@@ -159,6 +160,12 @@ async function executeGeoref() {
           <div class="win">
             <div class="win-head"><span class="t"><SvgIcon name="image" :size="15" />图片窗口</span></div>
             <div class="win-canvas canvas-img">
+              <img
+                v-if="project?.image"
+                class="work-image"
+                :src="imageFileUrl(project.image.id)"
+                :alt="project.image.original_name"
+              />
               <button
                 v-for="(point, index) in points"
                 :key="`img-${point.id}`"
@@ -362,6 +369,14 @@ async function executeGeoref() {
 }
 .canvas-img {
   background: repeating-conic-gradient(from 0deg, #13211a 0deg 90deg, #0e1a13 90deg 180deg) 0 0/26px 26px;
+}
+.work-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.88;
 }
 .canvas-map {
   background-color: #0a1410;

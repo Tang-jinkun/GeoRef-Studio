@@ -9,6 +9,7 @@ from app.schemas.common import ApiResponse
 from app.schemas.project import ProjectCreate
 from app.schemas.project import ProjectRead
 from app.services.project_service import create_project
+from app.services.project_service import delete_project
 from app.services.project_service import get_project
 from app.services.project_service import list_projects
 
@@ -38,3 +39,11 @@ def get_project_endpoint(
     project = get_project(db, project_id)
     return ApiResponse(data=ProjectRead.model_validate(project))
 
+
+@router.delete("/{project_id}", response_model=ApiResponse[dict[str, bool]])
+def delete_project_endpoint(
+    project_id: UUID,
+    db: Session = Depends(get_db),
+) -> ApiResponse[dict[str, bool]]:
+    delete_project(db, project_id)
+    return ApiResponse(data={"deleted": True})

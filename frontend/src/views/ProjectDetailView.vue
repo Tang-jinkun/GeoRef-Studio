@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { listControlPoints, type ControlPoint } from '@/api/controlPoints'
 import { listExportArtifacts, type ExportArtifact } from '@/api/exports'
-import { getProject, type Project } from '@/api/projects'
+import { imageFileUrl } from '@/api/images'
+import { deleteProject, getProject, type Project } from '@/api/projects'
 import AppBar from '@/components/AppBar.vue'
 import SvgIcon from '@/components/SvgIcon.vue'
 import { formatDate, formatNumber, formatSize, statusBadgeClass } from '@/utils/format'
 
 const route = useRoute()
+const router = useRouter()
 const project = ref<Project | null>(null)
 const controlPoints = ref<ControlPoint[]>([])
 const artifacts = ref<ExportArtifact[]>([])
@@ -36,6 +38,14 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function removeProject() {
+  if (!project.value) return
+  const confirmed = window.confirm(`确认删除工程「${project.value.name}」？`)
+  if (!confirmed) return
+  await deleteProject(project.value.id)
+  await router.push('/projects')
 }
 
 onMounted(() => {
@@ -84,13 +94,22 @@ onMounted(() => {
             >
               导出成果
             </RouterLink>
+            <button class="btn btn-ghost btn-danger btn-icon" title="删除工程" @click="removeProject">
+              <SvgIcon name="trash" :size="16" />
+            </button>
           </div>
         </div>
 
         <div class="grid detail-grid mt-8">
           <div class="panel">
             <div class="img-preview">
-              <SvgIcon name="image" :size="48" />
+              <img
+                v-if="project.image"
+                class="real-image"
+                :src="imageFileUrl(project.image.id)"
+                :alt="project.image.original_name"
+              />
+              <SvgIcon v-else name="image" :size="48" />
               <span class="badge neutral preview-badge">原始影像</span>
             </div>
             <div class="panel-body">
@@ -174,6 +193,11 @@ onMounted(() => {
   color: var(--muted);
   border-bottom: 1px solid var(--border);
   background: repeating-conic-gradient(from 0deg, #13211a 0deg 90deg, #0e1a13 90deg 180deg) 0 0/22px 22px;
+}
+.real-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 .preview-badge {
   position: absolute;
