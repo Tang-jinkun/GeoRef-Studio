@@ -9,6 +9,9 @@ export type Project = {
   image_id: string
   image_path: string
   status: string
+  transform_matrix: number[][] | null
+  rms_error: number | null
+  georef_time: string | null
   create_time: string
   update_time: string
   image: ImageFile | null
@@ -30,3 +33,7 @@ export async function listProjects() {
   return response.data
 }
 
+export async function getProject(projectId: string) {
+  const response = await http.get<ApiResponse<Project>>(`/project/${projectId}`)
+  return response.data
+}

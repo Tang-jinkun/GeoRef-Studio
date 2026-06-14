@@ -1,349 +1,192 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
-import { getHealth, type HealthPayload } from '@/api/health'
-import { uploadImage, type ImageFile } from '@/api/images'
-import { createProject, listProjects, type Project } from '@/api/projects'
+import { listProjects, type Project } from '@/api/projects'
+import AppBar from '@/components/AppBar.vue'
+import SvgIcon from '@/components/SvgIcon.vue'
+import { formatDate, statusBadgeClass } from '@/utils/format'
 
-const health = ref<HealthPayload | null>(null)
-const healthLoading = ref(false)
-const uploadLoading = ref(false)
-const projectLoading = ref(false)
+const loading = ref(false)
 const error = ref('')
-const uploadedImage = ref<ImageFile | null>(null)
 const projects = ref<Project[]>([])
-const fileInput = ref<HTMLInputElement | null>(null)
-const projectForm = ref({
-  name: '',
-  description: '',
-})
+const query = ref('')
+const statusFilter = ref('all')
 
-async function loadHealth() {
-  healthLoading.value = true
-  error.value = ''
-
-  try {
-    const response = await getHealth()
-    health.value = response.data
-  } catch {
-    error.value = '后端健康检查暂不可用'
-  } finally {
-    healthLoading.value = false
-  }
-}
+const filteredProjects = computed(() =>
+  projects.value.filter((project) => {
+    const matchStatus = statusFilter.value === 'all' || project.status === statusFilter.value
+    const matchQuery = project.name.toLowerCase().includes(query.value.trim().toLowerCase())
+    return matchStatus && matchQuery
+  }),
+)
 
 async function loadProjects() {
-  projectLoading.value = true
-
+  loading.value = true
+  error.value = ''
   try {
     const response = await listProjects()
     projects.value = response.data
   } catch {
-    ElMessage.warning('工程列表加载失败')
+    error.value = '无法获取工程列表，请检查后端服务。'
   } finally {
-    projectLoading.value = false
+    loading.value = false
   }
-}
-
-async function handleFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  uploadLoading.value = true
-
-  try {
-    const response = await uploadImage(file)
-    uploadedImage.value = response.data
-    if (!projectForm.value.name) {
-      projectForm.value.name = file.name.replace(/\.[^.]+$/, '')
-    }
-    ElMessage.success('图片上传成功')
-  } catch {
-    ElMessage.error('图片上传失败')
-  } finally {
-    uploadLoading.value = false
-    input.value = ''
-  }
-}
-
-function openFilePicker() {
-  fileInput.value?.click()
-}
-
-async function submitProject() {
-  if (!uploadedImage.value) {
-    ElMessage.warning('请先上传图片')
-    return
-  }
-  if (!projectForm.value.name.trim()) {
-    ElMessage.warning('请输入工程名称')
-    return
-  }
-
-  projectLoading.value = true
-
-  try {
-    await createProject({
-      name: projectForm.value.name.trim(),
-      description: projectForm.value.description.trim() || undefined,
-      image_id: uploadedImage.value.id,
-    })
-    projectForm.value = { name: '', description: '' }
-    uploadedImage.value = null
-    await loadProjects()
-    ElMessage.success('工程创建成功')
-  } catch {
-    ElMessage.error('工程创建失败')
-  } finally {
-    projectLoading.value = false
-  }
-}
-
-function formatSize(bytes: number) {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${bytes} B`
 }
 
 onMounted(() => {
-  void loadHealth()
   void loadProjects()
 })
 </script>
 
 <template>
-  <main class="home">
-    <section class="shell">
-      <div class="title-row">
+  <div class="app-bg">
+    <AppBar />
+    <main class="wrap wrap-wide">
+      <div class="between project-heading">
         <div>
-          <p class="eyebrow">GeoRef Studio</p>
-          <h1>地理配准工作台</h1>
+          <div class="eyebrow">PROJECTS</div>
+          <h1 class="h-page mt-2">工程列表</h1>
         </div>
-        <el-tag :type="health?.status === 'ok' ? 'success' : 'warning'" effect="plain">
-          {{ health?.status ?? 'checking' }}
-        </el-tag>
+        <RouterLink class="btn btn-primary" to="/projects/new">
+          <SvgIcon name="plus" :size="16" />已配准影像工程 · 快速新建
+        </RouterLink>
       </div>
 
-      <div class="status-panel">
-        <div>
-          <span class="label">Backend</span>
-          <strong>{{ health?.service ?? 'GeoRef Studio API' }}</strong>
+      <div class="between project-toolbar">
+        <div class="search project-search">
+          <SvgIcon name="search" :size="16" />
+          <input v-model="query" class="input" placeholder="按工程名称搜索..." />
         </div>
-        <div>
-          <span class="label">Environment</span>
-          <strong>{{ health?.environment ?? '-' }}</strong>
+        <div class="segmented">
+          <button
+            v-for="item in ['all', '未配准', '已配准', '已导出']"
+            :key="item"
+            :class="{ active: statusFilter === item }"
+            @click="statusFilter = item"
+          >
+            {{ item === 'all' ? '全部' : item }}
+          </button>
         </div>
-        <el-button :loading="healthLoading" @click="loadHealth">刷新</el-button>
       </div>
 
-      <el-alert v-if="error" :title="error" type="warning" :closable="false" />
-
-      <section class="workspace">
-        <div class="panel">
-          <div class="panel-header">
-            <h2>图片上传</h2>
-            <el-button :loading="uploadLoading" @click="openFilePicker">选择图片</el-button>
-            <input
-              ref="fileInput"
-              class="file-input"
-              type="file"
-              accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp"
-              @change="handleFileChange"
-            />
-          </div>
-
-          <dl v-if="uploadedImage" class="metadata">
-            <div>
-              <dt>名称</dt>
-              <dd>{{ uploadedImage.original_name }}</dd>
-            </div>
-            <div>
-              <dt>尺寸</dt>
-              <dd>{{ uploadedImage.width }} x {{ uploadedImage.height }}</dd>
-            </div>
-            <div>
-              <dt>大小</dt>
-              <dd>{{ formatSize(uploadedImage.size_bytes) }}</dd>
-            </div>
-            <div>
-              <dt>格式</dt>
-              <dd>{{ uploadedImage.format }}</dd>
-            </div>
-          </dl>
-
-          <el-form class="project-form" label-position="top">
-            <el-form-item label="工程名称">
-              <el-input v-model="projectForm.name" maxlength="255" />
-            </el-form-item>
-            <el-form-item label="工程描述">
-              <el-input v-model="projectForm.description" type="textarea" :rows="3" />
-            </el-form-item>
-            <el-button type="primary" :loading="projectLoading" @click="submitProject">
-              创建工程
-            </el-button>
-          </el-form>
-        </div>
-
-        <div class="panel">
-          <div class="panel-header">
-            <h2>工程列表</h2>
-            <el-button :loading="projectLoading" @click="loadProjects">刷新</el-button>
-          </div>
-
-          <el-table v-loading="projectLoading" :data="projects" class="project-table">
-            <el-table-column prop="name" label="工程名称" min-width="160" />
-            <el-table-column prop="status" label="状态" width="100" />
-            <el-table-column label="图片" min-width="180">
-              <template #default="{ row }">
-                {{ row.image?.original_name ?? '-' }}
-              </template>
-            </el-table-column>
-            <el-table-column label="创建时间" min-width="180">
-              <template #default="{ row }">
-                {{ new Date(row.create_time).toLocaleString() }}
-              </template>
-            </el-table-column>
-          </el-table>
+      <section v-if="loading" class="panel">
+        <div class="panel-body stack project-loading">
+          <div class="skel"></div>
+          <div class="skel"></div>
+          <div class="skel"></div>
+          <div class="skel"></div>
         </div>
       </section>
-    </section>
-  </main>
+
+      <section v-else-if="error" class="panel">
+        <div class="state danger">
+          <span class="glyph"><SvgIcon name="db" :size="30" /></span>
+          <h3>加载失败</h3>
+          <p>{{ error }}</p>
+          <button class="btn btn-primary" @click="loadProjects">重试</button>
+        </div>
+      </section>
+
+      <section v-else-if="projects.length === 0" class="panel">
+        <div class="state">
+          <span class="glyph"><SvgIcon name="folder" :size="30" /></span>
+          <h3>还没有任何工程</h3>
+          <p>创建你的第一个配准工程，上传一张待配准影像即可开始添加控制点。</p>
+          <RouterLink class="btn btn-primary mt-2" to="/projects/new">新建工程</RouterLink>
+        </div>
+      </section>
+
+      <section v-else class="panel">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>工程名称</th>
+              <th>状态</th>
+              <th>影像文件</th>
+              <th>尺寸</th>
+              <th>创建时间</th>
+              <th>更新时间</th>
+              <th style="text-align: right">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="project in filteredProjects" :key="project.id">
+              <td>
+                <RouterLink class="name row gap-2" :to="`/projects/${project.id}`">
+                  <SvgIcon name="image" :size="16" />{{ project.name }}
+                </RouterLink>
+              </td>
+              <td>
+                <span class="badge" :class="statusBadgeClass(project.status)">
+                  <span class="dot"></span>{{ project.status }}
+                </span>
+              </td>
+              <td class="mono project-file">{{ project.image?.original_name ?? '-' }}</td>
+              <td class="table-num">
+                {{ project.image ? `${project.image.width} x ${project.image.height}` : '-' }}
+              </td>
+              <td class="table-num project-date">{{ formatDate(project.create_time) }}</td>
+              <td class="table-num project-date">{{ formatDate(project.update_time) }}</td>
+              <td>
+                <div class="actions">
+                  <RouterLink class="btn btn-primary btn-sm" :to="`/projects/${project.id}/workbench`">
+                    打开
+                  </RouterLink>
+                  <RouterLink
+                    v-if="project.status !== '未配准'"
+                    class="btn btn-ghost btn-sm btn-icon"
+                    :to="`/projects/${project.id}/export`"
+                    title="导出"
+                  >
+                    <SvgIcon name="download" :size="15" />
+                  </RouterLink>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="between project-count">
+          <span class="mono">共 {{ filteredProjects.length }} 个工程</span>
+        </div>
+      </section>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.home {
-  min-height: 100vh;
-  padding: 32px;
+.project-heading {
+  margin-bottom: var(--space-6);
 }
 
-.shell {
-  max-width: 960px;
-  margin: 0 auto;
+.project-toolbar {
+  margin-bottom: var(--space-5);
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
-.title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 24px;
+.project-search {
+  flex: 1;
+  min-width: 240px;
+  max-width: 420px;
 }
 
-.eyebrow {
-  margin: 0 0 8px;
-  color: #49617d;
-  font-size: 14px;
+.project-loading {
+  gap: 14px;
 }
 
-h1 {
-  margin: 0;
-  font-size: 32px;
-  line-height: 1.2;
-  letter-spacing: 0;
+.project-loading .skel {
+  height: 44px;
 }
 
-.status-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 16px;
-  padding: 18px;
-  border: 1px solid #d8e0ea;
-  border-radius: 8px;
-  background: #ffffff;
+.project-file,
+.project-date {
+  font-size: var(--text-xs);
 }
 
-.label {
-  display: block;
-  margin-bottom: 6px;
-  color: #66788f;
-  font-size: 13px;
-}
-
-strong {
-  overflow-wrap: anywhere;
-}
-
-.workspace {
-  display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 20px;
-  margin-top: 20px;
-}
-
-.panel {
-  padding: 18px;
-  border: 1px solid #d8e0ea;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-h2 {
-  margin: 0;
-  font-size: 18px;
-  line-height: 1.3;
-  letter-spacing: 0;
-}
-
-.file-input {
-  display: none;
-}
-
-.metadata {
-  display: grid;
-  gap: 10px;
-  margin: 0 0 18px;
-  padding: 12px;
-  border-radius: 6px;
-  background: #f6f8fb;
-}
-
-.metadata div {
-  display: grid;
-  grid-template-columns: 72px minmax(0, 1fr);
-  gap: 8px;
-}
-
-dt {
-  color: #66788f;
-}
-
-dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.project-form {
-  margin-top: 16px;
-}
-
-.project-table {
-  width: 100%;
-}
-
-@media (max-width: 720px) {
-  .home {
-    padding: 20px;
-  }
-
-  .title-row,
-  .status-panel,
-  .workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .title-row {
-    display: grid;
-  }
+.project-count {
+  padding: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 </style>
