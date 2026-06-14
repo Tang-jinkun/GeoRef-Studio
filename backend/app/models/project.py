@@ -50,3 +50,8 @@ class Project(Base):
         back_populates="project",
         cascade="all, delete-orphan",
     )
+    export_artifacts = relationship(
+        "ExportArtifact",
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
