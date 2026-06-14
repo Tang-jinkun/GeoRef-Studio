@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://georef:georef_dev_password@localhost:5432/georef_studio"
     redis_url: str = "redis://localhost:6379/0"
     storage_root: str = "../storage"
-    cors_origins_raw: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
+    cors_origins_raw: str = Field(default="http://localhost:3003", alias="CORS_ORIGINS")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
@@ -25,4 +25,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

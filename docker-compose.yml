@@ -34,7 +34,7 @@ services:
       DATABASE_URL: postgresql+psycopg://georef:georef_dev_password@postgres:5432/georef_studio
       REDIS_URL: redis://redis:6379/0
       STORAGE_ROOT: /app/storage
-      CORS_ORIGINS: http://localhost:5173
+      CORS_ORIGINS: http://localhost:3003
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     volumes:
@@ -52,7 +52,7 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000/api
     ports:
-      - "${FRONTEND_PORT:-5173}:5173"
+      - "${FRONTEND_PORT:-3003}:3003"
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/index.html:/app/index.html
@@ -62,4 +62,3 @@ services:
 
 volumes:
   postgres_data:
-

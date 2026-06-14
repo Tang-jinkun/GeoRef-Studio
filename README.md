@@ -40,7 +40,7 @@ curl http://localhost:8000/api/health
 Frontend:
 
 ```text
-http://localhost:5173
+http://localhost:3003
 ```
 
 ## Manual Backend Setup
@@ -60,4 +60,3 @@ cd frontend
 npm install
 npm run dev
 ```
-
