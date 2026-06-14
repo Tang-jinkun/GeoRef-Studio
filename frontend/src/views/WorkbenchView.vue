@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import {
@@ -23,6 +23,16 @@ const loading = ref(false)
 const running = ref(false)
 const error = ref('')
 const message = ref('')
+const imageCanvas = ref<HTMLDivElement | null>(null)
+const imageScale = ref(1)
+const imagePan = reactive({ x: 0, y: 0 })
+const imageMouse = ref<{ x: number; y: number } | null>(null)
+const imageDrag = ref<{
+  startClientX: number
+  startClientY: number
+  startPanX: number
+  startPanY: number
+} | null>(null)
 
 const form = reactive({
   pixel_x: 0,
@@ -34,6 +44,28 @@ const form = reactive({
 const projectId = computed(() => String(route.params.id))
 const selectedPoint = computed(() => points.value.find((point) => point.id === selectedId.value) ?? null)
 const enabledCount = computed(() => points.value.filter((point) => point.enabled).length)
+const imageSize = computed(() => ({
+  width: project.value?.image?.width ?? 0,
+  height: project.value?.image?.height ?? 0,
+}))
+const fittedImage = computed(() => {
+  const canvas = imageCanvas.value
+  const { width, height } = imageSize.value
+  if (!canvas || width <= 0 || height <= 0) {
+    return { width: 0, height: 0, left: 0, top: 0, scale: 1 }
+  }
+
+  const fitScale = Math.min(canvas.clientWidth / width, canvas.clientHeight / height)
+  const displayWidth = width * fitScale * imageScale.value
+  const displayHeight = height * fitScale * imageScale.value
+  return {
+    width: displayWidth,
+    height: displayHeight,
+    left: (canvas.clientWidth - displayWidth) / 2 + imagePan.x,
+    top: (canvas.clientHeight - displayHeight) / 2 + imagePan.y,
+    scale: fitScale * imageScale.value,
+  }
+})
 const rms = computed(() => {
   const values = points.value.filter((point) => point.enabled && point.residual !== null)
   if (!values.length) return null
@@ -51,11 +83,94 @@ async function load() {
     project.value = projectResponse.data
     points.value = pointsResponse.data
     if (!selectedId.value && points.value[0]) selectedId.value = points.value[0].id
+    await nextTick()
+    fitImage()
   } catch {
     error.value = '工作台数据加载失败。'
   } finally {
     loading.value = false
   }
+}
+
+function fitImage() {
+  imageScale.value = 1
+  imagePan.x = 0
+  imagePan.y = 0
+}
+
+function zoomImage(delta: number) {
+  imageScale.value = Math.min(8, Math.max(0.25, Number((imageScale.value + delta).toFixed(2))))
+}
+
+function imagePointToCanvas(point: ControlPoint) {
+  const image = fittedImage.value
+  return {
+    left: `${image.left + point.pixel_x * image.scale}px`,
+    top: `${image.top + point.pixel_y * image.scale}px`,
+  }
+}
+
+function canvasEventToPixel(event: MouseEvent) {
+  const canvas = imageCanvas.value
+  const { width, height } = imageSize.value
+  if (!canvas || width <= 0 || height <= 0) return null
+
+  const rect = canvas.getBoundingClientRect()
+  const image = fittedImage.value
+  const x = (event.clientX - rect.left - image.left) / image.scale
+  const y = (event.clientY - rect.top - image.top) / image.scale
+
+  if (x < 0 || y < 0 || x > width || y > height) return null
+  return {
+    x: Number(x.toFixed(2)),
+    y: Number(y.toFixed(2)),
+  }
+}
+
+function updateImageMouse(event: MouseEvent) {
+  imageMouse.value = canvasEventToPixel(event)
+}
+
+function leaveImageCanvas() {
+  imageMouse.value = null
+}
+
+function pickImagePixel(event: MouseEvent) {
+  if ((event.target as HTMLElement).closest('.gcp')) return
+  const pixel = canvasEventToPixel(event)
+  if (!pixel) return
+
+  form.pixel_x = pixel.x
+  form.pixel_y = pixel.y
+  message.value = `已选取图片像素：${pixel.x}, ${pixel.y}。`
+}
+
+function startImagePan(event: MouseEvent) {
+  if (event.button !== 1 && !(event.button === 0 && event.altKey)) return
+  event.preventDefault()
+  imageDrag.value = {
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startPanX: imagePan.x,
+    startPanY: imagePan.y,
+  }
+}
+
+function moveImagePan(event: MouseEvent) {
+  updateImageMouse(event)
+  if (!imageDrag.value) return
+
+  imagePan.x = imageDrag.value.startPanX + event.clientX - imageDrag.value.startClientX
+  imagePan.y = imageDrag.value.startPanY + event.clientY - imageDrag.value.startClientY
+}
+
+function stopImagePan() {
+  imageDrag.value = null
+}
+
+function handleImageWheel(event: WheelEvent) {
+  event.preventDefault()
+  zoomImage(event.deltaY > 0 ? -0.1 : 0.1)
 }
 
 async function addPoint() {
@@ -121,6 +236,7 @@ async function executeGeoref() {
       </div>
       <div class="sep"></div>
       <button class="tbtn" title="刷新" @click="load"><SvgIcon name="refresh" :size="18" /></button>
+      <button class="tbtn" title="图片全图显示" @click="fitImage"><SvgIcon name="open" :size="18" /></button>
       <button class="tbtn active" title="新增控制点"><SvgIcon name="pin" :size="18" /></button>
       <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < 3" @click="executeGeoref">
         <SvgIcon name="play" :size="15" />{{ running ? '执行中' : '执行配准' }}
@@ -145,6 +261,7 @@ async function executeGeoref() {
         </section>
         <section class="col-sec">
           <div class="eyebrow">ADD GCP</div>
+          <p class="hint-text mt-2">点击图片可回填 PixelX / PixelY。按住 Alt 拖拽或鼠标中键可平移图片，滚轮缩放。</p>
           <div class="grid gap-3 mt-4">
             <input v-model.number="form.pixel_x" class="input mono" placeholder="PixelX" />
             <input v-model.number="form.pixel_y" class="input mono" placeholder="PixelY" />
@@ -158,26 +275,56 @@ async function executeGeoref() {
       <section class="wb-col wb-center">
         <div class="dual">
           <div class="win">
-            <div class="win-head"><span class="t"><SvgIcon name="image" :size="15" />图片窗口</span></div>
-            <div class="win-canvas canvas-img">
-              <img
+            <div class="win-head">
+              <span class="t"><SvgIcon name="image" :size="15" />图片窗口</span>
+              <div class="win-tools">
+                <button class="tbtn mini" title="缩小" @click="zoomImage(-0.2)">-</button>
+                <button class="tbtn mini" title="全图显示" @click="fitImage">1:1</button>
+                <button class="tbtn mini" title="放大" @click="zoomImage(0.2)">+</button>
+              </div>
+            </div>
+            <div
+              ref="imageCanvas"
+              class="win-canvas canvas-img"
+              :class="{ panning: imageDrag }"
+              @click="pickImagePixel"
+              @mousedown="startImagePan"
+              @mousemove="moveImagePan"
+              @mouseup="stopImagePan"
+              @mouseleave="leaveImageCanvas(); stopImagePan()"
+              @wheel="handleImageWheel"
+            >
+              <div
                 v-if="project?.image"
-                class="work-image"
-                :src="imageFileUrl(project.image.id)"
-                :alt="project.image.original_name"
-              />
+                class="image-stage"
+                :style="{
+                  width: `${fittedImage.width}px`,
+                  height: `${fittedImage.height}px`,
+                  transform: `translate(${fittedImage.left}px, ${fittedImage.top}px)`,
+                }"
+              >
+                <img
+                  class="work-image"
+                  :src="imageFileUrl(project.image.id)"
+                  :alt="project.image.original_name"
+                  draggable="false"
+                />
+              </div>
               <button
                 v-for="(point, index) in points"
                 :key="`img-${point.id}`"
                 class="gcp"
                 :class="{ sel: selectedId === point.id, disabled: !point.enabled }"
-                :style="{ left: `${15 + (index % 5) * 14}%`, top: `${22 + Math.floor(index / 5) * 18}%` }"
+                :style="imagePointToCanvas(point)"
                 @click="selectedId = point.id"
               >
                 <span class="ring"></span><span class="lbl">{{ index + 1 }}</span>
               </button>
-              <span class="zoom-badge">100%</span>
-              <span class="coord-badge">PX {{ selectedPoint?.pixel_x ?? '-' }} / {{ selectedPoint?.pixel_y ?? '-' }}</span>
+              <span class="zoom-badge">{{ Math.round(imageScale * 100) }}%</span>
+              <span class="coord-badge">
+                PX {{ imageMouse?.x ?? selectedPoint?.pixel_x ?? '-' }} /
+                {{ imageMouse?.y ?? selectedPoint?.pixel_y ?? '-' }}
+              </span>
             </div>
           </div>
           <div class="win">
@@ -202,7 +349,8 @@ async function executeGeoref() {
           <span>控制点 <b>{{ points.length }}</b></span>
           <span>启用 <b>{{ enabledCount }}</b></span>
           <span>RMS <b>{{ formatNumber(rms, 6) }}</b></span>
-          <span class="mode">{{ loading ? '加载中' : '浏览模式' }}</span>
+          <span>鼠标像素 <b>{{ imageMouse ? `${imageMouse.x}, ${imageMouse.y}` : '-' }}</b></span>
+          <span class="mode">{{ loading ? '加载中' : imageDrag ? '图片平移' : '新增控制点模式' }}</span>
         </div>
       </section>
 
@@ -328,6 +476,11 @@ async function executeGeoref() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.hint-text {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
 .dual {
   flex: 1;
   display: grid;
@@ -361,22 +514,45 @@ async function executeGeoref() {
   align-items: center;
   gap: 6px;
 }
+.win-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.tbtn.mini {
+  width: 30px;
+  height: 28px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
 .win-canvas {
   flex: 1;
   position: relative;
   overflow: hidden;
   cursor: crosshair;
 }
+.win-canvas.panning {
+  cursor: grabbing;
+}
 .canvas-img {
   background: repeating-conic-gradient(from 0deg, #13211a 0deg 90deg, #0e1a13 90deg 180deg) 0 0/26px 26px;
 }
-.work-image {
+.image-stage {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  border: 1px solid color-mix(in oklab, var(--accent), transparent 70%);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.12);
+}
+.work-image {
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: fill;
   opacity: 0.88;
+  user-select: none;
+  pointer-events: none;
 }
 .canvas-map {
   background-color: #0a1410;
