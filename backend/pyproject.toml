@@ -1,0 +1,15 @@
+[project]
+name = "georef-studio-backend"
+version = "0.1.0"
+description = "FastAPI backend for GeoRef Studio"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
