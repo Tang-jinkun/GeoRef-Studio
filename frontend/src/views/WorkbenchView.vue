@@ -71,6 +71,7 @@ const form = reactive({
   longitude: 0,
   latitude: 0,
 })
+const hasPickedMapCoordinate = ref(false)
 
 const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN as string | undefined
 
@@ -256,6 +257,7 @@ function initMap() {
     const latitude = snapped?.latitude ?? event.lngLat.lat
     form.longitude = Number(longitude.toFixed(6))
     form.latitude = Number(latitude.toFixed(6))
+    hasPickedMapCoordinate.value = true
     if (snapped) {
       message.value = `已吸附边界：${form.longitude}, ${form.latitude}，距离 ${snapped.pixelDistance.toFixed(1)}px。`
     } else {
@@ -574,6 +576,18 @@ function mapPointToCanvas(point: ControlPoint) {
   }
 }
 
+function mapCoordinateToCanvas(longitude: number, latitude: number) {
+  mapRevision.value
+  if (!map.value) {
+    return { left: '-999px', top: '-999px' }
+  }
+  const position = map.value.project([longitude, latitude])
+  return {
+    left: `${position.x}px`,
+    top: `${position.y}px`,
+  }
+}
+
 function fitImage() {
   imageScale.value = 1
   imagePan.x = 0
@@ -668,6 +682,7 @@ async function addPoint() {
     })
     points.value.push(response.data)
     selectedId.value = response.data.id
+    hasPickedMapCoordinate.value = false
     message.value = '控制点已新增。'
     invalidatePreview()
     fitMapToPoints()
@@ -915,6 +930,14 @@ watch(previewOpacity, () => {
               >
                 <span class="ring"></span><span class="lbl">{{ index + 1 }}</span>
               </button>
+              <div
+                v-if="hasPickedMapCoordinate"
+                class="gcp pending"
+                :style="mapCoordinateToCanvas(form.longitude, form.latitude)"
+                title="待新增地图点"
+              >
+                <span class="ring"></span>
+              </div>
               <span class="zoom-badge">{{ mapStyle === 'osm' ? 'OSM' : '天地图' }}</span>
               <span class="coord-badge">
                 LL {{ mapMouse?.longitude ?? selectedPoint?.longitude ?? '-' }} /
@@ -1241,30 +1264,48 @@ watch(previewOpacity, () => {
 }
 .gcp {
   position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 30px;
+  height: 30px;
   transform: translate(-50%, -50%);
   cursor: pointer;
   z-index: 4;
   background: transparent;
   border: 0;
+  color: var(--accent);
 }
 .gcp .ring {
   position: absolute;
   inset: 0;
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  background: color-mix(in oklab, var(--accent), transparent 80%);
+}
+.gcp .ring::before,
+.gcp .ring::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--bg), transparent 20%);
+}
+.gcp .ring::before {
+  width: 28px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+}
+.gcp .ring::after {
+  width: 2px;
+  height: 28px;
+  transform: translate(-50%, -50%);
 }
 .gcp .lbl {
   position: absolute;
-  top: -7px;
-  left: -7px;
-  width: 16px;
+  top: -5px;
+  left: -5px;
+  min-width: 16px;
   height: 16px;
+  padding: 0 4px;
   background: var(--accent);
   color: var(--accent-on);
-  border-radius: 50%;
+  border-radius: 3px;
   font-size: 9px;
   font-weight: 700;
   display: grid;
@@ -1272,15 +1313,27 @@ watch(previewOpacity, () => {
   font-family: var(--font-mono);
 }
 .gcp.sel .ring {
-  border-color: #fff;
-  box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent), transparent 60%);
+  color: #fff;
+  filter: drop-shadow(0 0 5px var(--accent));
 }
 .gcp.disabled .ring {
-  border-color: var(--muted);
-  background: transparent;
+  color: var(--muted);
 }
 .gcp.disabled .lbl {
   background: var(--muted);
+}
+.gcp.pending {
+  pointer-events: none;
+  color: var(--warn);
+  z-index: 5;
+}
+.gcp.pending .ring::before,
+.gcp.pending .ring::after {
+  width: 32px;
+}
+.gcp.pending .ring::after {
+  width: 2px;
+  height: 32px;
 }
 .zoom-badge,
 .coord-badge {
