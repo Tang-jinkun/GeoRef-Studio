@@ -20,6 +20,15 @@ export async function exportGeoTiff(projectId: string) {
   return response.data
 }
 
+export async function exportXyzTiles(projectId: string, minZoom = 0, maxZoom = 6) {
+  const response = await http.post<ApiResponse<ExportArtifact>>('/export/xyz', {
+    project_id: projectId,
+    min_zoom: minZoom,
+    max_zoom: maxZoom,
+  })
+  return response.data
+}
+
 export async function listExportArtifacts(projectId: string) {
   const response = await http.get<ApiResponse<ExportArtifact[]>>('/export/list', {
     params: { project_id: projectId },

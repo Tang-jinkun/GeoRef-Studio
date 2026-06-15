@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -13,6 +15,7 @@ from app.models.export_artifact import ExportArtifact
 from app.models.project import Project
 
 ARTIFACT_TYPE_GEOTIFF = "GeoTIFF"
+ARTIFACT_TYPE_XYZ_ZIP = "XYZ ZIP"
 ARTIFACT_STATUS_COMPLETED = "completed"
 
 
@@ -50,6 +53,109 @@ def export_geotiff(db: Session, project_id: UUID) -> ExportArtifact:
         size_bytes=output_path.stat().st_size,
         status=ARTIFACT_STATUS_COMPLETED,
         message=None,
+    )
+    project.status = "已导出"
+    db.add(artifact)
+    db.commit()
+    db.refresh(artifact)
+    return artifact
+
+
+def _latest_geotiff_artifact(db: Session, project_id: UUID) -> ExportArtifact | None:
+    statement = (
+        select(ExportArtifact)
+        .where(
+            ExportArtifact.project_id == project_id,
+            ExportArtifact.artifact_type == ARTIFACT_TYPE_GEOTIFF,
+            ExportArtifact.status == ARTIFACT_STATUS_COMPLETED,
+        )
+        .order_by(ExportArtifact.create_time.desc(), ExportArtifact.id.desc())
+    )
+    for artifact in db.scalars(statement).all():
+        if Path(artifact.storage_path).exists():
+            return artifact
+    return None
+
+
+def _get_or_create_geotiff_artifact(db: Session, project_id: UUID) -> ExportArtifact:
+    artifact = _latest_geotiff_artifact(db, project_id)
+    if artifact is not None:
+        return artifact
+    return export_geotiff(db, project_id)
+
+
+def export_xyz_tiles(
+    db: Session,
+    project_id: UUID,
+    min_zoom: int = 0,
+    max_zoom: int = 6,
+) -> ExportArtifact:
+    project = _get_project_or_404(db, project_id)
+    if max_zoom < min_zoom:
+        raise HTTPException(
+            status_code=400,
+            detail="max_zoom must be greater than or equal to min_zoom",
+        )
+
+    geotiff_artifact = _get_or_create_geotiff_artifact(db, project.id)
+    geotiff_path = Path(geotiff_artifact.storage_path)
+    if not geotiff_path.exists():
+        raise HTTPException(status_code=404, detail="GeoTIFF file not found")
+
+    output_dir = _outputs_dir(project.id)
+    run_id = uuid4().hex[:8]
+    tiles_dir = output_dir / f"xyz_z{min_zoom}-{max_zoom}_{run_id}"
+    file_name = f"{project.id}_xyz_z{min_zoom}-{max_zoom}_{run_id}.zip"
+    archive_base = output_dir / file_name.removesuffix(".zip")
+    archive_path = output_dir / file_name
+
+    try:
+        tiles_dir.mkdir(parents=True, exist_ok=False)
+        subprocess.run(
+            [
+                "gdal2tiles.py",
+                "--xyz",
+                "-w",
+                "none",
+                "--processes=1",
+                "--tilesize=256",
+                "-r",
+                "bilinear",
+                "-z",
+                f"{min_zoom}-{max_zoom}",
+                str(geotiff_path),
+                str(tiles_dir),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        shutil.make_archive(str(archive_base), "zip", tiles_dir)
+    except subprocess.CalledProcessError as exc:
+        if archive_path.exists():
+            archive_path.unlink()
+        raise HTTPException(
+            status_code=500,
+            detail=f"XYZ tile export failed: {exc.stderr.strip() or exc.stdout.strip()}",
+        ) from exc
+    except OSError as exc:
+        if archive_path.exists():
+            archive_path.unlink()
+        raise HTTPException(
+            status_code=500,
+            detail="XYZ tile archive failed",
+        ) from exc
+    finally:
+        shutil.rmtree(tiles_dir, ignore_errors=True)
+
+    artifact = ExportArtifact(
+        project_id=project.id,
+        artifact_type=ARTIFACT_TYPE_XYZ_ZIP,
+        file_name=file_name,
+        storage_path=str(archive_path),
+        size_bytes=archive_path.stat().st_size,
+        status=ARTIFACT_STATUS_COMPLETED,
+        message=f"z{min_zoom}-{max_zoom}",
     )
     project.status = "已导出"
     db.add(artifact)
