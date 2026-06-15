@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.routes import boundary
 from app.api.routes import control_point
 from app.api.routes import export
 from app.api.routes import georef
@@ -14,3 +15,4 @@ api_router.include_router(project.router, tags=["project"])
 api_router.include_router(control_point.router, tags=["control-point"])
 api_router.include_router(georef.router, tags=["georef"])
 api_router.include_router(export.router, tags=["export"])
+api_router.include_router(boundary.router, tags=["boundary"])

@@ -25,6 +25,7 @@ coverage/
 # Local data
 storage/uploads/*
 storage/outputs/*
+storage/boundaries/*
 !storage/uploads/.gitkeep
 !storage/outputs/.gitkeep
-
+!storage/boundaries/.gitkeep

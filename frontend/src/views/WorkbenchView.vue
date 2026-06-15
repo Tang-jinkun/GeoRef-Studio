@@ -11,6 +11,12 @@ import {
   type ControlPoint,
 } from '@/api/controlPoints'
 import {
+  getBoundaryGeoJson,
+  listBoundaryDatasets,
+  type BoundaryDataset,
+  type BoundaryGeoJson,
+} from '@/api/boundaries'
+import {
   getGeorefPreview,
   getRms,
   listTransformOptions,
@@ -46,6 +52,12 @@ const previewOpacity = ref(0.65)
 const transformOptions = ref<TransformOption[]>([])
 const selectedTransform = ref('auto')
 const targetCrs = ref('EPSG:3857')
+const boundaryDatasets = ref<BoundaryDataset[]>([])
+const selectedBoundaryId = ref('')
+const boundaryGeoJson = ref<BoundaryGeoJson | null>(null)
+const boundaryVisible = ref(true)
+const snapToBoundary = ref(true)
+const snapThresholdPixels = ref(12)
 const imageDrag = ref<{
   startClientX: number
   startClientY: number
@@ -165,18 +177,41 @@ function formatMeters(value: number | null | undefined) {
   return `${value.toFixed(2)} m`
 }
 
+async function loadBoundaryGeoJson() {
+  if (!selectedBoundaryId.value) {
+    boundaryGeoJson.value = null
+    renderBoundaryLayer()
+    return
+  }
+
+  try {
+    boundaryGeoJson.value = await getBoundaryGeoJson(selectedBoundaryId.value)
+    renderBoundaryLayer()
+  } catch {
+    boundaryGeoJson.value = null
+    error.value = '边界 GeoJSON 加载失败。'
+    renderBoundaryLayer()
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectResponse, rmsResponse, optionsResponse] = await Promise.all([
+    const [projectResponse, rmsResponse, optionsResponse, boundaryResponse] = await Promise.all([
       getProject(projectId.value),
       getRms(projectId.value),
       listTransformOptions(),
+      listBoundaryDatasets(),
     ])
     project.value = projectResponse.data
     points.value = rmsResponse.data.control_points
     transformOptions.value = optionsResponse.data
+    boundaryDatasets.value = boundaryResponse.data
+    if (!selectedBoundaryId.value && boundaryDatasets.value[0]) {
+      selectedBoundaryId.value = boundaryDatasets.value[0].id
+      await loadBoundaryGeoJson()
+    }
     selectedTransform.value = projectResponse.data.transform_type ?? selectedTransform.value
     targetCrs.value = projectResponse.data.target_crs ?? targetCrs.value
     if (!selectedId.value && points.value[0]) selectedId.value = points.value[0].id
@@ -216,12 +251,20 @@ function initMap() {
     mapMouse.value = null
   })
   map.value.on('click', (event) => {
-    form.longitude = Number(event.lngLat.lng.toFixed(6))
-    form.latitude = Number(event.lngLat.lat.toFixed(6))
-    message.value = `已选取地图坐标：${form.longitude}, ${form.latitude}。`
+    const snapped = findBoundarySnap(event.lngLat)
+    const longitude = snapped?.longitude ?? event.lngLat.lng
+    const latitude = snapped?.latitude ?? event.lngLat.lat
+    form.longitude = Number(longitude.toFixed(6))
+    form.latitude = Number(latitude.toFixed(6))
+    if (snapped) {
+      message.value = `已吸附边界：${form.longitude}, ${form.latitude}，距离 ${snapped.pixelDistance.toFixed(1)}px。`
+    } else {
+      message.value = `已选取地图坐标：${form.longitude}, ${form.latitude}。`
+    }
   })
   map.value.on('style.load', () => {
     renderPreviewLayer()
+    renderBoundaryLayer()
     renderResidualLayer()
   })
 }
@@ -262,6 +305,33 @@ function renderPreviewLayer() {
     source: 'georef-preview-source',
     paint: {
       'raster-opacity': previewOpacity.value,
+    },
+  })
+}
+
+function renderBoundaryLayer() {
+  if (!map.value) return
+
+  if (map.value.getLayer('boundary-line-layer')) {
+    map.value.removeLayer('boundary-line-layer')
+  }
+  if (map.value.getSource('boundary-line-source')) {
+    map.value.removeSource('boundary-line-source')
+  }
+  if (!boundaryVisible.value || !boundaryGeoJson.value) return
+
+  map.value.addSource('boundary-line-source', {
+    type: 'geojson',
+    data: boundaryGeoJson.value,
+  })
+  map.value.addLayer({
+    id: 'boundary-line-layer',
+    type: 'line',
+    source: 'boundary-line-source',
+    paint: {
+      'line-color': '#38bdf8',
+      'line-width': 1.6,
+      'line-opacity': 0.9,
     },
   })
 }
@@ -339,6 +409,82 @@ function renderResidualLayer() {
   })
 }
 
+function findBoundarySnap(lngLat: mapboxgl.LngLat) {
+  if (!snapToBoundary.value || !boundaryGeoJson.value || !map.value) return null
+
+  const point = map.value.project(lngLat)
+  let best: { x: number; y: number; pixelDistance: number } | null = null
+  for (const line of extractBoundaryLines(boundaryGeoJson.value)) {
+    for (let index = 0; index < line.length - 1; index += 1) {
+      const start = map.value.project(line[index])
+      const end = map.value.project(line[index + 1])
+      const candidate = closestPointOnScreenSegment(point.x, point.y, start.x, start.y, end.x, end.y)
+      if (!best || candidate.pixelDistance < best.pixelDistance) {
+        best = candidate
+      }
+    }
+  }
+
+  if (!best || best.pixelDistance > snapThresholdPixels.value) return null
+  const snapped = map.value.unproject([best.x, best.y])
+  return {
+    longitude: snapped.lng,
+    latitude: snapped.lat,
+    pixelDistance: best.pixelDistance,
+  }
+}
+
+function extractBoundaryLines(geojson: BoundaryGeoJson): [number, number][][] {
+  const lines: [number, number][][] = []
+  for (const feature of geojson.features) {
+    const geometry = feature.geometry
+    if (!geometry) continue
+
+    if (geometry.type === 'LineString') {
+      lines.push(toLngLatLine(geometry.coordinates))
+    } else if (geometry.type === 'MultiLineString') {
+      geometry.coordinates.forEach((line) => lines.push(toLngLatLine(line)))
+    } else if (geometry.type === 'Polygon') {
+      geometry.coordinates.forEach((ring) => lines.push(toLngLatLine(ring)))
+    } else if (geometry.type === 'MultiPolygon') {
+      geometry.coordinates.forEach((polygon) => {
+        polygon.forEach((ring) => lines.push(toLngLatLine(ring)))
+      })
+    }
+  }
+  return lines.filter((line) => line.length >= 2)
+}
+
+function toLngLatLine(coordinates: GeoJSON.Position[]): [number, number][] {
+  return coordinates
+    .filter((coordinate) => coordinate.length >= 2)
+    .map((coordinate) => [Number(coordinate[0]), Number(coordinate[1])])
+}
+
+function closestPointOnScreenSegment(
+  pointX: number,
+  pointY: number,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+) {
+  const deltaX = endX - startX
+  const deltaY = endY - startY
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY
+  const ratio =
+    lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((pointX - startX) * deltaX + (pointY - startY) * deltaY) / lengthSquared))
+  const x = startX + ratio * deltaX
+  const y = startY + ratio * deltaY
+  return {
+    x,
+    y,
+    pixelDistance: Math.hypot(pointX - x, pointY - y),
+  }
+}
+
 function invalidatePreview() {
   preview.value = null
   previewVisible.value = false
@@ -356,6 +502,7 @@ function invalidatePreview() {
     }
   }
   renderPreviewLayer()
+  renderBoundaryLayer()
   renderResidualLayer()
 }
 
@@ -378,6 +525,8 @@ async function loadPreview() {
     previewOpacity.value = response.data.opacity
     previewVisible.value = true
     renderPreviewLayer()
+    renderBoundaryLayer()
+    renderResidualLayer()
     fitMapToPreview()
     message.value = '配准预览已叠加到地图。'
   } catch {
@@ -392,6 +541,8 @@ function togglePreview() {
   }
   previewVisible.value = !previewVisible.value
   renderPreviewLayer()
+  renderBoundaryLayer()
+  renderResidualLayer()
 }
 
 function pointNumber(point: ControlPoint) {
@@ -631,6 +782,33 @@ watch(previewOpacity, () => {
           <div class="layer mt-4"><SvgIcon name="image" :size="16" /><span class="t">原始影像</span></div>
           <div class="layer"><SvgIcon name="map" :size="16" /><span class="t">Mapbox 底图</span></div>
           <div class="layer"><SvgIcon name="layers" :size="16" /><span class="t">配准预览</span></div>
+          <div class="boundary-box mt-4">
+            <div class="field compact">
+              <label for="boundary-dataset">边界 GeoJSON</label>
+              <select
+                id="boundary-dataset"
+                v-model="selectedBoundaryId"
+                class="select"
+                :disabled="boundaryDatasets.length === 0"
+                @change="loadBoundaryGeoJson"
+              >
+                <option value="">无边界数据</option>
+                <option v-for="dataset in boundaryDatasets" :key="dataset.id" :value="dataset.id">
+                  {{ dataset.file_name }}
+                </option>
+              </select>
+            </div>
+            <label class="switch compact-switch">
+              <input v-model="boundaryVisible" type="checkbox" @change="renderBoundaryLayer" />
+              <span class="track"></span>
+              <span>显示边界</span>
+            </label>
+            <label class="switch compact-switch">
+              <input v-model="snapToBoundary" type="checkbox" />
+              <span class="track"></span>
+              <span>点击吸附</span>
+            </label>
+          </div>
         </section>
         <section class="col-sec">
           <div class="eyebrow">ADD GCP</div>
@@ -905,6 +1083,21 @@ watch(previewOpacity, () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.boundary-box {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--bg), transparent 55%);
+}
+.boundary-box .field {
+  margin-bottom: 0;
+}
+.compact-switch {
+  font-size: var(--text-xs);
+  color: var(--fg-2);
 }
 .hint-text {
   color: var(--muted);
