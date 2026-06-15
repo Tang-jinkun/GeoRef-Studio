@@ -7,7 +7,6 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import {
   createControlPoint,
   deleteControlPoint,
-  listControlPoints,
   updateControlPoint,
   type ControlPoint,
 } from '@/api/controlPoints'
@@ -59,8 +58,8 @@ const enabledCount = computed(() => points.value.filter((point) => point.enabled
 const canPreview = computed(() => Boolean(project.value?.transform_matrix || preview.value))
 const sortedPoints = computed(() =>
   [...points.value].sort((left, right) => {
-    const leftResidual = left.residual ?? Number.POSITIVE_INFINITY
-    const rightResidual = right.residual ?? Number.POSITIVE_INFINITY
+    const leftResidual = left.residual_meters ?? left.residual ?? Number.POSITIVE_INFINITY
+    const rightResidual = right.residual_meters ?? right.residual ?? Number.POSITIVE_INFINITY
     return leftResidual - rightResidual
   }),
 )
@@ -86,11 +85,20 @@ const fittedImage = computed(() => {
     scale: fitScale * imageScale.value,
   }
 })
-const rms = computed(() => {
-  const values = points.value.filter((point) => point.enabled && point.residual !== null)
+const rmsMeters = computed(() => {
+  const values = points.value.filter((point) => point.enabled && point.residual_meters !== null)
   if (!values.length) return null
-  return Math.sqrt(values.reduce((sum, point) => sum + Number(point.residual) ** 2, 0) / values.length)
+  return Math.sqrt(values.reduce((sum, point) => sum + Number(point.residual_meters) ** 2, 0) / values.length)
 })
+const hasResidualDiagnostics = computed(() =>
+  points.value.some(
+    (point) =>
+      point.enabled &&
+      point.predicted_longitude !== null &&
+      point.predicted_latitude !== null &&
+      point.residual_meters !== null,
+  ),
+)
 const mapStyles = computed(() => ({
   osm: {
     version: 8,
@@ -136,20 +144,28 @@ const mapStyles = computed(() => ({
   },
 }))
 
+function formatMeters(value: number | null | undefined) {
+  if (value === null || value === undefined) return '-'
+  if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(2)} km`
+  if (Math.abs(value) >= 10) return `${value.toFixed(1)} m`
+  return `${value.toFixed(2)} m`
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectResponse, pointsResponse] = await Promise.all([
+    const [projectResponse, rmsResponse] = await Promise.all([
       getProject(projectId.value),
-      listControlPoints(projectId.value),
+      getRms(projectId.value),
     ])
     project.value = projectResponse.data
-    points.value = pointsResponse.data
+    points.value = rmsResponse.data.control_points
     if (!selectedId.value && points.value[0]) selectedId.value = points.value[0].id
     await nextTick()
     fitImage()
     fitMapToPoints()
+    renderResidualLayer()
   } catch {
     error.value = '工作台数据加载失败。'
   } finally {
@@ -188,6 +204,7 @@ function initMap() {
   })
   map.value.on('style.load', () => {
     renderPreviewLayer()
+    renderResidualLayer()
   })
 }
 
@@ -231,6 +248,79 @@ function renderPreviewLayer() {
   })
 }
 
+function renderResidualLayer() {
+  if (!map.value) return
+
+  if (map.value.getLayer('gcp-residual-lines')) {
+    map.value.removeLayer('gcp-residual-lines')
+  }
+  if (map.value.getLayer('gcp-predicted-points')) {
+    map.value.removeLayer('gcp-predicted-points')
+  }
+  if (map.value.getSource('gcp-residual-source')) {
+    map.value.removeSource('gcp-residual-source')
+  }
+
+  const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = []
+  const pointFeatures: GeoJSON.Feature<GeoJSON.Point>[] = []
+  for (const point of points.value) {
+    if (
+      !point.enabled ||
+      point.predicted_longitude === null ||
+      point.predicted_latitude === null ||
+      point.residual_meters === null
+    ) {
+      continue
+    }
+
+    const target: [number, number] = [point.longitude, point.latitude]
+    const predicted: [number, number] = [point.predicted_longitude, point.predicted_latitude]
+    lineFeatures.push({
+      type: 'Feature',
+      properties: { id: point.id, residual_meters: point.residual_meters },
+      geometry: { type: 'LineString', coordinates: [target, predicted] },
+    })
+    pointFeatures.push({
+      type: 'Feature',
+      properties: { id: point.id, residual_meters: point.residual_meters },
+      geometry: { type: 'Point', coordinates: predicted },
+    })
+  }
+
+  if (lineFeatures.length === 0 && pointFeatures.length === 0) return
+
+  map.value.addSource('gcp-residual-source', {
+    type: 'geojson',
+    data: {
+      type: 'FeatureCollection',
+      features: [...lineFeatures, ...pointFeatures],
+    } satisfies GeoJSON.FeatureCollection,
+  })
+  map.value.addLayer({
+    id: 'gcp-residual-lines',
+    type: 'line',
+    source: 'gcp-residual-source',
+    filter: ['==', ['geometry-type'], 'LineString'],
+    paint: {
+      'line-color': '#fb7185',
+      'line-width': 2,
+      'line-opacity': 0.9,
+    },
+  })
+  map.value.addLayer({
+    id: 'gcp-predicted-points',
+    type: 'circle',
+    source: 'gcp-residual-source',
+    filter: ['==', ['geometry-type'], 'Point'],
+    paint: {
+      'circle-radius': 5,
+      'circle-color': '#facc15',
+      'circle-stroke-color': '#07110c',
+      'circle-stroke-width': 2,
+    },
+  })
+}
+
 function invalidatePreview() {
   preview.value = null
   previewVisible.value = false
@@ -244,6 +334,7 @@ function invalidatePreview() {
     }
   }
   renderPreviewLayer()
+  renderResidualLayer()
 }
 
 function updatePreviewOpacity() {
@@ -436,9 +527,10 @@ async function executeGeoref() {
     points.value = response.data.control_points
     const rmsResponse = await getRms(projectId.value)
     points.value = rmsResponse.data.control_points
-    message.value = `配准完成，RMS = ${formatNumber(response.data.rms, 6)}。`
+    message.value = `配准完成，RMS = ${formatMeters(rmsResponse.data.rms_meters ?? response.data.rms_meters)}。`
     await load()
     await loadPreview()
+    renderResidualLayer()
   } catch {
     error.value = '配准失败，至少需要 3 个启用控制点。'
   } finally {
@@ -630,13 +722,17 @@ watch(previewOpacity, () => {
                 </div>
                 <button class="btn btn-ghost btn-sm" @click="fitMapToPreview">定位</button>
               </div>
+              <div v-if="hasResidualDiagnostics" class="diag-legend">
+                <span><i class="pred"></i>预测点</span>
+                <span><i class="line"></i>偏移线</span>
+              </div>
             </div>
           </div>
         </div>
         <div class="wb-status">
           <span>控制点 <b>{{ points.length }}</b></span>
           <span>启用 <b>{{ enabledCount }}</b></span>
-          <span>RMS <b>{{ formatNumber(rms, 6) }}</b></span>
+          <span>RMS <b>{{ formatMeters(rmsMeters) }}</b></span>
           <span>鼠标像素 <b>{{ imageMouse ? `${imageMouse.x}, ${imageMouse.y}` : '-' }}</b></span>
           <span>地图坐标 <b>{{ mapMouse ? `${mapMouse.longitude}, ${mapMouse.latitude}` : '-' }}</b></span>
           <span class="mode">{{ loading ? '加载中' : imageDrag ? '图片平移' : '新增控制点模式' }}</span>
@@ -666,8 +762,12 @@ watch(previewOpacity, () => {
           >
             <div class="id">#{{ index + 1 }}</div>
             <div class="coords">PX {{ point.pixel_x }}, {{ point.pixel_y }}</div>
-            <div class="res">{{ formatNumber(point.residual, 6) }}</div>
+            <div class="res">{{ formatMeters(point.residual_meters) }}</div>
             <div class="geo">LL {{ point.longitude }}, {{ point.latitude }}</div>
+            <div v-if="point.predicted_longitude !== null" class="predicted">
+              预测 {{ formatNumber(point.predicted_longitude, 6) }},
+              {{ formatNumber(point.predicted_latitude, 6) }}
+            </div>
             <div class="acts">
               <button class="btn btn-ghost btn-sm" @click.stop="togglePoint(point)">
                 {{ point.enabled ? '禁用' : '启用' }}
@@ -679,7 +779,7 @@ watch(previewOpacity, () => {
 
         <section class="acc">
           <div class="acc-grid">
-            <div class="acc-cell"><div class="k">RMS</div><div class="v">{{ formatNumber(rms, 6) }}</div></div>
+            <div class="acc-cell"><div class="k">RMS</div><div class="v">{{ formatMeters(rmsMeters) }}</div></div>
             <div class="acc-cell"><div class="k">最低要求</div><div class="v">{{ enabledCount }} / 3</div></div>
           </div>
           <div v-if="error" class="callout danger"><SvgIcon name="warn" :size="18" />{{ error }}</div>
@@ -969,6 +1069,42 @@ watch(previewOpacity, () => {
   bottom: 10px;
   color: var(--meta);
 }
+.diag-legend {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 3;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-2);
+  background: color-mix(in oklab, var(--surface), transparent 10%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 5px 9px;
+}
+.diag-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.diag-legend i {
+  display: inline-block;
+}
+.diag-legend .pred {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #facc15;
+  border: 2px solid #07110c;
+}
+.diag-legend .line {
+  width: 16px;
+  height: 2px;
+  background: #fb7185;
+}
 .wb-status {
   flex: none;
   height: 30px;
@@ -1031,6 +1167,12 @@ watch(previewOpacity, () => {
 .gcp-item .geo {
   font-size: 10px;
   color: var(--muted);
+}
+.gcp-item .predicted {
+  grid-column: 2 / 4;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--warn);
 }
 .gcp-item .res {
   font-size: 11px;

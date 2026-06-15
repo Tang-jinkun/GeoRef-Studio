@@ -24,12 +24,13 @@ def run_georef_endpoint(
     payload: GeorefRunRequest,
     db: Session = Depends(get_db),
 ) -> ApiResponse[GeorefRunResult]:
-    project, control_points = run_georef(db, payload.project_id)
+    project, control_points, rms_meters = run_georef(db, payload.project_id)
     return ApiResponse(
         data=GeorefRunResult(
             project_id=project.id,
             transform_matrix=project.transform_matrix or [],
             rms=project.rms_error or 0.0,
+            rms_meters=rms_meters,
             control_points=[
                 ControlPointRead.model_validate(point) for point in control_points
             ],
@@ -42,11 +43,12 @@ def get_rms_endpoint(
     project_id: UUID,
     db: Session = Depends(get_db),
 ) -> ApiResponse[RmsResult]:
-    project, control_points, enabled_count = get_rms(db, project_id)
+    project, control_points, enabled_count, rms_meters = get_rms(db, project_id)
     return ApiResponse(
         data=RmsResult(
             project_id=project.id,
             rms=project.rms_error,
+            rms_meters=rms_meters,
             enabled_control_point_count=enabled_count,
             minimum_required_count=MIN_CONTROL_POINT_COUNT,
             control_points=[

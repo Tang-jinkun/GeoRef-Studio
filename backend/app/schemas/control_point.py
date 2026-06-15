@@ -33,6 +33,11 @@ class ControlPointRead(BaseModel):
     residual: float | None = None
     delta_x: float | None = None
     delta_y: float | None = None
+    predicted_longitude: float | None = None
+    predicted_latitude: float | None = None
+    delta_x_meters: float | None = None
+    delta_y_meters: float | None = None
+    residual_meters: float | None = None
     enabled: bool
     create_time: datetime
     update_time: datetime

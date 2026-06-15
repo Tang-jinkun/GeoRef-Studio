@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timezone
+import math
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -33,7 +34,10 @@ def _list_project_control_points(db: Session, project_id: UUID) -> list[ControlP
     return list(db.scalars(statement).all())
 
 
-def run_georef(db: Session, project_id: UUID) -> tuple[Project, list[ControlPoint]]:
+def run_georef(
+    db: Session,
+    project_id: UUID,
+) -> tuple[Project, list[ControlPoint], float | None]:
     project = _get_project_or_404(db, project_id)
     control_points = _list_project_control_points(db, project.id)
     enabled_points = [point for point in control_points if point.enabled]
@@ -74,20 +78,98 @@ def run_georef(db: Session, project_id: UUID) -> tuple[Project, list[ControlPoin
     db.refresh(project)
     for point in control_points:
         db.refresh(point)
-    return project, control_points
+    rms_meters = enrich_control_point_diagnostics(project, control_points)
+    return project, control_points, rms_meters
 
 
-def get_rms(db: Session, project_id: UUID) -> tuple[Project, list[ControlPoint], int]:
+def get_rms(
+    db: Session,
+    project_id: UUID,
+) -> tuple[Project, list[ControlPoint], int, float | None]:
     project = _get_project_or_404(db, project_id)
     control_points = _list_project_control_points(db, project.id)
     enabled_count = len([point for point in control_points if point.enabled])
-    return project, control_points, enabled_count
+    rms_meters = enrich_control_point_diagnostics(project, control_points)
+    return project, control_points, enabled_count, rms_meters
 
 
 def _transform_pixel(matrix: list[list[float]], pixel_x: float, pixel_y: float) -> list[float]:
     longitude = matrix[0][0] * pixel_x + matrix[0][1] * pixel_y + matrix[0][2]
     latitude = matrix[1][0] * pixel_x + matrix[1][1] * pixel_y + matrix[1][2]
     return [float(longitude), float(latitude)]
+
+
+def _degree_delta_to_meters(
+    delta_longitude: float,
+    delta_latitude: float,
+    latitude: float,
+) -> tuple[float, float, float]:
+    latitude_rad = math.radians(latitude)
+    meters_per_degree_latitude = (
+        111132.92
+        - 559.82 * math.cos(2 * latitude_rad)
+        + 1.175 * math.cos(4 * latitude_rad)
+        - 0.0023 * math.cos(6 * latitude_rad)
+    )
+    meters_per_degree_longitude = (
+        111412.84 * math.cos(latitude_rad)
+        - 93.5 * math.cos(3 * latitude_rad)
+        + 0.118 * math.cos(5 * latitude_rad)
+    )
+    delta_x_meters = delta_longitude * meters_per_degree_longitude
+    delta_y_meters = delta_latitude * meters_per_degree_latitude
+    residual_meters = math.hypot(delta_x_meters, delta_y_meters)
+    return delta_x_meters, delta_y_meters, residual_meters
+
+
+def _clear_diagnostics(point: ControlPoint) -> None:
+    point.predicted_longitude = None
+    point.predicted_latitude = None
+    point.delta_x_meters = None
+    point.delta_y_meters = None
+    point.residual_meters = None
+
+
+def enrich_control_point_diagnostics(
+    project: Project,
+    control_points: list[ControlPoint],
+) -> float | None:
+    if not project.transform_matrix:
+        for point in control_points:
+            _clear_diagnostics(point)
+        return None
+
+    squared_sum = 0.0
+    measured_count = 0
+    for point in control_points:
+        if not point.enabled:
+            _clear_diagnostics(point)
+            continue
+
+        predicted_longitude, predicted_latitude = _transform_pixel(
+            project.transform_matrix,
+            point.pixel_x,
+            point.pixel_y,
+        )
+        delta_longitude = predicted_longitude - point.longitude
+        delta_latitude = predicted_latitude - point.latitude
+        delta_x_meters, delta_y_meters, residual_meters = _degree_delta_to_meters(
+            delta_longitude,
+            delta_latitude,
+            point.latitude,
+        )
+
+        point.predicted_longitude = predicted_longitude
+        point.predicted_latitude = predicted_latitude
+        point.delta_x_meters = delta_x_meters
+        point.delta_y_meters = delta_y_meters
+        point.residual_meters = residual_meters
+        squared_sum += residual_meters * residual_meters
+        measured_count += 1
+
+    if measured_count == 0:
+        return None
+    return float(math.sqrt(squared_sum / measured_count))
 
 
 def get_preview(db: Session, project_id: UUID) -> tuple[Project, list[list[float]]]:

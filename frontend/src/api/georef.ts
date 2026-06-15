@@ -6,12 +6,14 @@ export type GeorefRunResult = {
   project_id: string
   transform_matrix: number[][]
   rms: number
+  rms_meters: number | null
   control_points: ControlPoint[]
 }
 
 export type RmsResult = {
   project_id: string
   rms: number | null
+  rms_meters: number | null
   enabled_control_point_count: number
   minimum_required_count: number
   control_points: ControlPoint[]

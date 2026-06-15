@@ -11,6 +11,11 @@ export type ControlPoint = {
   residual: number | null
   delta_x: number | null
   delta_y: number | null
+  predicted_longitude: number | null
+  predicted_latitude: number | null
+  delta_x_meters: number | null
+  delta_y_meters: number | null
+  residual_meters: number | null
   enabled: boolean
   create_time: string
   update_time: string

@@ -13,6 +13,8 @@ class AffinePoint:
 
 @dataclass(frozen=True)
 class AffineResidual:
+    predicted_longitude: float
+    predicted_latitude: float
     delta_x: float
     delta_y: float
     residual: float
@@ -48,6 +50,8 @@ def fit_affine_transform(points: list[AffinePoint]) -> AffineResult:
         squared_sum += residual * residual
         residuals.append(
             AffineResidual(
+                predicted_longitude=float(predicted_x[index]),
+                predicted_latitude=float(predicted_y[index]),
                 delta_x=delta_x,
                 delta_y=delta_y,
                 residual=residual,
