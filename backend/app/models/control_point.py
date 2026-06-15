@@ -5,6 +5,7 @@ from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
+from sqlalchemy import String
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped
@@ -30,6 +31,7 @@ class ControlPoint(Base):
     residual: Mapped[float | None] = mapped_column(Float)
     delta_x: Mapped[float | None] = mapped_column(Float)
     delta_y: Mapped[float | None] = mapped_column(Float)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="fit")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     create_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

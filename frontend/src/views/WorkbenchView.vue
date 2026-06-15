@@ -78,6 +78,8 @@ const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN as string | undefined
 const projectId = computed(() => String(route.params.id))
 const selectedPoint = computed(() => points.value.find((point) => point.id === selectedId.value) ?? null)
 const enabledCount = computed(() => points.value.filter((point) => point.enabled).length)
+const fitEnabledCount = computed(() => points.value.filter((point) => point.enabled && point.role === 'fit').length)
+const checkEnabledCount = computed(() => points.value.filter((point) => point.enabled && point.role === 'check').length)
 const canPreview = computed(() => Boolean(project.value?.georef_result_path || preview.value))
 const selectedTransformOption = computed(() =>
   transformOptions.value.find((option) => option.value === selectedTransform.value),
@@ -113,7 +115,12 @@ const fittedImage = computed(() => {
   }
 })
 const rmsMeters = computed(() => {
-  const values = points.value.filter((point) => point.enabled && point.residual_meters !== null)
+  const values = points.value.filter((point) => point.enabled && point.role === 'fit' && point.residual_meters !== null)
+  if (!values.length) return null
+  return Math.sqrt(values.reduce((sum, point) => sum + Number(point.residual_meters) ** 2, 0) / values.length)
+})
+const checkRmsMeters = computed(() => {
+  const values = points.value.filter((point) => point.enabled && point.role === 'check' && point.residual_meters !== null)
   if (!values.length) return null
   return Math.sqrt(values.reduce((sum, point) => sum + Number(point.residual_meters) ** 2, 0) / values.length)
 })
@@ -686,6 +693,7 @@ async function addPoint() {
       pixel_y: Number(form.pixel_y),
       longitude: Number(form.longitude),
       latitude: Number(form.latitude),
+      role: 'fit',
     })
     points.value.push(response.data)
     selectedId.value = response.data.id
@@ -700,6 +708,13 @@ async function addPoint() {
 
 async function togglePoint(point: ControlPoint) {
   const response = await updateControlPoint(point.id, { enabled: !point.enabled })
+  points.value = points.value.map((item) => (item.id === point.id ? response.data : item))
+  invalidatePreview()
+  fitMapToPoints()
+}
+
+async function togglePointRole(point: ControlPoint) {
+  const response = await updateControlPoint(point.id, { role: point.role === 'fit' ? 'check' : 'fit' })
   points.value = points.value.map((item) => (item.id === point.id ? response.data : item))
   invalidatePreview()
   fitMapToPoints()
@@ -776,7 +791,11 @@ watch(previewOpacity, () => {
           {{ option.label }}
         </option>
       </select>
-      <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < selectedTransformMinimum" @click="executeGeoref">
+      <select v-model="targetCrs" class="select crs-select" title="目标 CRS">
+        <option value="EPSG:4326">EPSG:4326</option>
+        <option value="EPSG:3857">EPSG:3857</option>
+      </select>
+      <button class="btn btn-primary btn-sm" :disabled="running || fitEnabledCount < selectedTransformMinimum" @click="executeGeoref">
         <SvgIcon name="play" :size="15" />{{ running ? '执行中' : '执行配准' }}
       </button>
       <button class="btn btn-ghost btn-sm" :disabled="!canPreview" @click="togglePreview">
@@ -971,8 +990,10 @@ watch(previewOpacity, () => {
         </div>
         <div class="wb-status">
           <span>控制点 <b>{{ points.length }}</b></span>
-          <span>启用 <b>{{ enabledCount }}</b></span>
+          <span>参与 <b>{{ fitEnabledCount }}</b></span>
+          <span>检查 <b>{{ checkEnabledCount }}</b></span>
           <span>RMS <b>{{ formatMeters(rmsMeters) }}</b></span>
+          <span>检查 RMS <b>{{ formatMeters(checkRmsMeters) }}</b></span>
           <span>鼠标像素 <b>{{ imageMouse ? `${imageMouse.x}, ${imageMouse.y}` : '-' }}</b></span>
           <span>地图坐标 <b>{{ mapMouse ? `${mapMouse.longitude}, ${mapMouse.latitude}` : '-' }}</b></span>
           <span class="mode">{{ loading ? '加载中' : imageDrag ? '图片平移' : '新增控制点模式' }}</span>
@@ -1003,7 +1024,10 @@ watch(previewOpacity, () => {
             <div class="id">#{{ index + 1 }}</div>
             <div class="coords">PX {{ point.pixel_x }}, {{ point.pixel_y }}</div>
             <div class="res">{{ formatMeters(point.residual_meters) }}</div>
-            <div class="geo">LL {{ point.longitude }}, {{ point.latitude }}</div>
+            <div class="geo">
+              <span class="role" :class="point.role">{{ point.role === 'fit' ? '参与' : '检查' }}</span>
+              LL {{ point.longitude }}, {{ point.latitude }}
+            </div>
             <div v-if="point.predicted_longitude !== null" class="predicted">
               预测 {{ formatNumber(point.predicted_longitude, 6) }},
               {{ formatNumber(point.predicted_latitude, 6) }}
@@ -1011,6 +1035,9 @@ watch(previewOpacity, () => {
             <div class="acts">
               <button class="btn btn-ghost btn-sm" @click.stop="togglePoint(point)">
                 {{ point.enabled ? '禁用' : '启用' }}
+              </button>
+              <button class="btn btn-ghost btn-sm" @click.stop="togglePointRole(point)">
+                {{ point.role === 'fit' ? '设为检查' : '参与配准' }}
               </button>
               <button class="btn btn-danger btn-sm" @click.stop="removePoint(point)">删除</button>
             </div>
@@ -1020,13 +1047,15 @@ watch(previewOpacity, () => {
         <section class="acc">
           <div class="acc-grid">
             <div class="acc-cell"><div class="k">RMS</div><div class="v">{{ formatMeters(rmsMeters) }}</div></div>
-            <div class="acc-cell"><div class="k">最低要求</div><div class="v">{{ enabledCount }} / 3</div></div>
+            <div class="acc-cell"><div class="k">检查 RMS</div><div class="v">{{ formatMeters(checkRmsMeters) }}</div></div>
+            <div class="acc-cell"><div class="k">参与点</div><div class="v">{{ fitEnabledCount }} / {{ selectedTransformMinimum }}</div></div>
+            <div class="acc-cell"><div class="k">检查点</div><div class="v">{{ checkEnabledCount }}</div></div>
           </div>
           <div v-if="error" class="callout danger"><SvgIcon name="warn" :size="18" />{{ error }}</div>
           <div v-else-if="message" class="callout ok"><SvgIcon name="check" :size="18" />{{ message }}</div>
           <div v-else class="callout">
             <SvgIcon name="info" :size="18" />
-            当前模型至少需要 {{ selectedTransformMinimum }} 个启用控制点。
+            当前模型至少需要 {{ selectedTransformMinimum }} 个启用参与点。
           </div>
         </section>
       </aside>
@@ -1066,6 +1095,12 @@ watch(previewOpacity, () => {
 }
 .transform-select {
   width: 148px;
+  height: 32px;
+  padding: 6px 10px;
+  font-size: var(--text-xs);
+}
+.crs-select {
+  width: 116px;
   height: 32px;
   padding: 6px 10px;
   font-size: var(--text-xs);
@@ -1461,6 +1496,21 @@ watch(previewOpacity, () => {
 .gcp-item .geo {
   font-size: 10px;
   color: var(--muted);
+}
+.gcp-item .role {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--accent);
+  border: 1px solid color-mix(in oklab, var(--accent), transparent 55%);
+}
+.gcp-item .role.check {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn), transparent 55%);
 }
 .gcp-item .predicted {
   grid-column: 2 / 4;

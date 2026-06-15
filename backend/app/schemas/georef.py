@@ -19,6 +19,8 @@ class GeorefRunResult(BaseModel):
     target_crs: str
     rms: float
     rms_meters: float | None = None
+    fit_rms_meters: float | None = None
+    check_rms_meters: float | None = None
     preview_available: bool = False
     control_points: list[ControlPointRead]
 
@@ -27,6 +29,8 @@ class RmsResult(BaseModel):
     project_id: UUID
     rms: float | None
     rms_meters: float | None = None
+    fit_rms_meters: float | None = None
+    check_rms_meters: float | None = None
     transform_type: str | None = None
     target_crs: str | None = None
     enabled_control_point_count: int

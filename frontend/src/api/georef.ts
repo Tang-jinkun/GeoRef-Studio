@@ -9,6 +9,8 @@ export type GeorefRunResult = {
   target_crs: string
   rms: number
   rms_meters: number | null
+  fit_rms_meters: number | null
+  check_rms_meters: number | null
   preview_available: boolean
   control_points: ControlPoint[]
 }
@@ -17,6 +19,8 @@ export type RmsResult = {
   project_id: string
   rms: number | null
   rms_meters: number | null
+  fit_rms_meters: number | null
+  check_rms_meters: number | null
   transform_type: string | null
   target_crs: string | null
   enabled_control_point_count: number

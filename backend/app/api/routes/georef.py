@@ -28,7 +28,7 @@ def run_georef_endpoint(
     payload: GeorefRunRequest,
     db: Session = Depends(get_db),
 ) -> ApiResponse[GeorefRunResult]:
-    project, control_points, rms_meters = run_georef(
+    project, control_points, fit_rms_meters, check_rms_meters = run_georef(
         db,
         payload.project_id,
         payload.transform_type,
@@ -41,7 +41,9 @@ def run_georef_endpoint(
             transform_type=project.transform_type or payload.transform_type,
             target_crs=project.target_crs or payload.target_crs,
             rms=project.rms_error or 0.0,
-            rms_meters=rms_meters,
+            rms_meters=fit_rms_meters,
+            fit_rms_meters=fit_rms_meters,
+            check_rms_meters=check_rms_meters,
             preview_available=bool(project.georef_result_path),
             control_points=[
                 ControlPointRead.model_validate(point) for point in control_points
@@ -55,12 +57,14 @@ def get_rms_endpoint(
     project_id: UUID,
     db: Session = Depends(get_db),
 ) -> ApiResponse[RmsResult]:
-    project, control_points, enabled_count, rms_meters = get_rms(db, project_id)
+    project, control_points, enabled_count, fit_rms_meters, check_rms_meters = get_rms(db, project_id)
     return ApiResponse(
         data=RmsResult(
             project_id=project.id,
             rms=project.rms_error,
-            rms_meters=rms_meters,
+            rms_meters=fit_rms_meters,
+            fit_rms_meters=fit_rms_meters,
+            check_rms_meters=check_rms_meters,
             transform_type=project.transform_type,
             target_crs=project.target_crs,
             enabled_control_point_count=enabled_count,

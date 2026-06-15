@@ -76,17 +76,17 @@ def run_georef(
     project_id: UUID,
     transform_type: str = TRANSFORM_AUTO,
     target_crs: str = DEFAULT_TARGET_CRS,
-) -> tuple[Project, list[ControlPoint], float | None]:
+) -> tuple[Project, list[ControlPoint], float | None, float | None]:
     project = _get_project_or_404(db, project_id)
     control_points = _list_project_control_points(db, project.id)
-    enabled_points = [point for point in control_points if point.enabled]
-    selected_transform = _resolve_requested_transform(transform_type, len(enabled_points))
+    fit_points = [point for point in control_points if point.enabled and point.role == "fit"]
+    selected_transform = _resolve_requested_transform(transform_type, len(fit_points))
 
     minimum_points = minimum_points_for_transform(selected_transform)
-    if len(enabled_points) < minimum_points:
+    if len(fit_points) < minimum_points:
         raise HTTPException(
             status_code=400,
-            detail=f"{selected_transform} requires at least {minimum_points} enabled control points",
+            detail=f"{selected_transform} requires at least {minimum_points} enabled fit control points",
         )
 
     source_path = Path(project.image_path)
@@ -100,7 +100,7 @@ def run_georef(
             longitude=point.longitude,
             latitude=point.latitude,
         )
-        for point in enabled_points
+        for point in fit_points
     ]
     output_path = _georef_result_path(project.id)
     preview_path = _preview_png_path(project.id)
@@ -126,7 +126,7 @@ def run_georef(
         point.delta_y = None
         _clear_diagnostics(point)
 
-    for point, residual in zip(enabled_points, result.residuals, strict=True):
+    for point, residual in zip(fit_points, result.residuals, strict=True):
         point.delta_x = residual.delta_x
         point.delta_y = residual.delta_y
         point.residual = residual.residual_degrees
@@ -149,19 +149,19 @@ def run_georef(
     db.refresh(project)
     for point in control_points:
         db.refresh(point)
-    rms_meters = enrich_control_point_diagnostics(project, control_points)
-    return project, control_points, rms_meters
+    fit_rms_meters, check_rms_meters = enrich_control_point_diagnostics(project, control_points)
+    return project, control_points, fit_rms_meters, check_rms_meters
 
 
 def get_rms(
     db: Session,
     project_id: UUID,
-) -> tuple[Project, list[ControlPoint], int, float | None]:
+) -> tuple[Project, list[ControlPoint], int, float | None, float | None]:
     project = _get_project_or_404(db, project_id)
     control_points = _list_project_control_points(db, project.id)
     enabled_count = len([point for point in control_points if point.enabled])
-    rms_meters = enrich_control_point_diagnostics(project, control_points)
-    return project, control_points, enabled_count, rms_meters
+    fit_rms_meters, check_rms_meters = enrich_control_point_diagnostics(project, control_points)
+    return project, control_points, enabled_count, fit_rms_meters, check_rms_meters
 
 
 def list_transform_options() -> list[dict[str, int | str]]:
@@ -196,16 +196,18 @@ def _clear_diagnostics(point: ControlPoint) -> None:
 def enrich_control_point_diagnostics(
     project: Project,
     control_points: list[ControlPoint],
-) -> float | None:
+) -> tuple[float | None, float | None]:
     if not project.transform_matrix or not project.transform_type or not project.target_crs:
         for point in control_points:
             _clear_diagnostics(point)
-        return project.rms_meters
+        return project.rms_meters, None
 
     transformer = Transformer.from_crs(WGS84_CRS, project.target_crs, always_xy=True)
     inverse_transformer = Transformer.from_crs(project.target_crs, WGS84_CRS, always_xy=True)
-    squared_sum = 0.0
-    measured_count = 0
+    fit_squared_sum = 0.0
+    fit_count = 0
+    check_squared_sum = 0.0
+    check_count = 0
     for point in control_points:
         if not point.enabled:
             _clear_diagnostics(point)
@@ -232,12 +234,16 @@ def enrich_control_point_diagnostics(
         point.delta_x_meters = delta_x_meters
         point.delta_y_meters = delta_y_meters
         point.residual_meters = residual_meters
-        squared_sum += residual_meters * residual_meters
-        measured_count += 1
+        if point.role == "check":
+            check_squared_sum += residual_meters * residual_meters
+            check_count += 1
+        else:
+            fit_squared_sum += residual_meters * residual_meters
+            fit_count += 1
 
-    if measured_count == 0:
-        return project.rms_meters
-    return float(math.sqrt(squared_sum / measured_count))
+    fit_rms = float(math.sqrt(fit_squared_sum / fit_count)) if fit_count else project.rms_meters
+    check_rms = float(math.sqrt(check_squared_sum / check_count)) if check_count else None
+    return fit_rms, check_rms
 
 
 def _predict_target_coordinate(

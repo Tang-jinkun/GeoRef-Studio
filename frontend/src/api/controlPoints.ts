@@ -16,6 +16,7 @@ export type ControlPoint = {
   delta_x_meters: number | null
   delta_y_meters: number | null
   residual_meters: number | null
+  role: 'fit' | 'check'
   enabled: boolean
   create_time: string
   update_time: string
@@ -27,11 +28,12 @@ export type ControlPointCreatePayload = {
   pixel_y: number
   longitude: number
   latitude: number
+  role?: 'fit' | 'check'
   enabled?: boolean
 }
 
 export type ControlPointUpdatePayload = Partial<
-  Pick<ControlPoint, 'pixel_x' | 'pixel_y' | 'longitude' | 'latitude' | 'enabled'>
+  Pick<ControlPoint, 'pixel_x' | 'pixel_y' | 'longitude' | 'latitude' | 'role' | 'enabled'>
 >
 
 export async function createControlPoint(payload: ControlPointCreatePayload) {
