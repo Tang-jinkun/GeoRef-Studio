@@ -1,3 +1,4 @@
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -18,9 +19,17 @@ def _get_project_or_404(db: Session, project_id: UUID) -> Project:
 
 
 def _invalidate_georef(project: Project) -> None:
+    if project.georef_result_path:
+        result_path = Path(project.georef_result_path)
+        result_path.unlink(missing_ok=True)
+        result_path.with_name("georef_preview.png").unlink(missing_ok=True)
     project.status = "未配准"
     project.transform_matrix = None
     project.rms_error = None
+    project.transform_type = None
+    project.target_crs = None
+    project.rms_meters = None
+    project.georef_result_path = None
     project.georef_time = None
 
 

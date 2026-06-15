@@ -32,6 +32,10 @@ class ProjectRead(BaseModel):
     status: str
     transform_matrix: list[list[float]] | None = None
     rms_error: float | None = None
+    transform_type: str | None = None
+    target_crs: str | None = None
+    rms_meters: float | None = None
+    georef_result_path: str | None = None
     georef_time: datetime | None = None
     create_time: datetime
     update_time: datetime

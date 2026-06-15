@@ -31,6 +31,10 @@ class Project(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="未配准")
     transform_matrix: Mapped[list[list[float]] | None] = mapped_column(JSON)
     rms_error: Mapped[float | None] = mapped_column(Float)
+    transform_type: Mapped[str | None] = mapped_column(String(32))
+    target_crs: Mapped[str | None] = mapped_column(String(32))
+    rms_meters: Mapped[float | None] = mapped_column(Float)
+    georef_result_path: Mapped[str | None] = mapped_column(String(1024))
     georef_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     create_time: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

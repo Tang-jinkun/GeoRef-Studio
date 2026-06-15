@@ -63,6 +63,9 @@ def delete_project(db: Session, project_id: UUID) -> None:
             select(ExportArtifact.storage_path).where(ExportArtifact.project_id == project.id)
         ).all()
     ]
+    if project.georef_result_path:
+        georef_path = Path(project.georef_result_path)
+        artifact_paths.extend([georef_path, georef_path.with_name("georef_preview.png")])
 
     db.delete(project)
     db.flush()

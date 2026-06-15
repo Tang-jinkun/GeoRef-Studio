@@ -10,7 +10,14 @@ import {
   updateControlPoint,
   type ControlPoint,
 } from '@/api/controlPoints'
-import { getGeorefPreview, getRms, runGeoref, type GeorefPreviewResult } from '@/api/georef'
+import {
+  getGeorefPreview,
+  getRms,
+  listTransformOptions,
+  runGeoref,
+  type GeorefPreviewResult,
+  type TransformOption,
+} from '@/api/georef'
 import { imageFileUrl } from '@/api/images'
 import { getProject, type Project } from '@/api/projects'
 import SvgIcon from '@/components/SvgIcon.vue'
@@ -36,6 +43,9 @@ const mapRevision = ref(0)
 const preview = ref<GeorefPreviewResult | null>(null)
 const previewVisible = ref(false)
 const previewOpacity = ref(0.65)
+const transformOptions = ref<TransformOption[]>([])
+const selectedTransform = ref('auto')
+const targetCrs = ref('EPSG:3857')
 const imageDrag = ref<{
   startClientX: number
   startClientY: number
@@ -55,7 +65,11 @@ const tiandituToken = import.meta.env.VITE_TIANDITU_TOKEN as string | undefined
 const projectId = computed(() => String(route.params.id))
 const selectedPoint = computed(() => points.value.find((point) => point.id === selectedId.value) ?? null)
 const enabledCount = computed(() => points.value.filter((point) => point.enabled).length)
-const canPreview = computed(() => Boolean(project.value?.transform_matrix || preview.value))
+const canPreview = computed(() => Boolean(project.value?.georef_result_path || preview.value))
+const selectedTransformOption = computed(() =>
+  transformOptions.value.find((option) => option.value === selectedTransform.value),
+)
+const selectedTransformMinimum = computed(() => selectedTransformOption.value?.minimum_control_points ?? 3)
 const sortedPoints = computed(() =>
   [...points.value].sort((left, right) => {
     const leftResidual = left.residual_meters ?? left.residual ?? Number.POSITIVE_INFINITY
@@ -155,12 +169,16 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [projectResponse, rmsResponse] = await Promise.all([
+    const [projectResponse, rmsResponse, optionsResponse] = await Promise.all([
       getProject(projectId.value),
       getRms(projectId.value),
+      listTransformOptions(),
     ])
     project.value = projectResponse.data
     points.value = rmsResponse.data.control_points
+    transformOptions.value = optionsResponse.data
+    selectedTransform.value = projectResponse.data.transform_type ?? selectedTransform.value
+    targetCrs.value = projectResponse.data.target_crs ?? targetCrs.value
     if (!selectedId.value && points.value[0]) selectedId.value = points.value[0].id
     await nextTick()
     fitImage()
@@ -330,6 +348,10 @@ function invalidatePreview() {
       status: '未配准',
       transform_matrix: null,
       rms_error: null,
+      transform_type: null,
+      target_crs: null,
+      rms_meters: null,
+      georef_result_path: null,
       georef_time: null,
     }
   }
@@ -523,11 +545,11 @@ async function executeGeoref() {
   error.value = ''
   message.value = ''
   try {
-    const response = await runGeoref(projectId.value)
+    const response = await runGeoref(projectId.value, selectedTransform.value, targetCrs.value)
     points.value = response.data.control_points
     const rmsResponse = await getRms(projectId.value)
     points.value = rmsResponse.data.control_points
-    message.value = `配准完成，RMS = ${formatMeters(rmsResponse.data.rms_meters ?? response.data.rms_meters)}。`
+    message.value = `配准完成，${response.data.transform_type}，RMS = ${formatMeters(rmsResponse.data.rms_meters ?? response.data.rms_meters)}。`
     await load()
     await loadPreview()
     renderResidualLayer()
@@ -576,7 +598,12 @@ watch(previewOpacity, () => {
       <button class="tbtn" title="刷新" @click="load"><SvgIcon name="refresh" :size="18" /></button>
       <button class="tbtn" title="图片全图显示" @click="fitImage"><SvgIcon name="open" :size="18" /></button>
       <button class="tbtn active" title="新增控制点"><SvgIcon name="pin" :size="18" /></button>
-      <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < 3" @click="executeGeoref">
+      <select v-model="selectedTransform" class="select transform-select" title="变换模型">
+        <option v-for="option in transformOptions" :key="option.value" :value="option.value">
+          {{ option.label }}
+        </option>
+      </select>
+      <button class="btn btn-primary btn-sm" :disabled="running || enabledCount < selectedTransformMinimum" @click="executeGeoref">
         <SvgIcon name="play" :size="15" />{{ running ? '执行中' : '执行配准' }}
       </button>
       <button class="btn btn-ghost btn-sm" :disabled="!canPreview" @click="togglePreview">
@@ -593,6 +620,11 @@ watch(previewOpacity, () => {
           <div class="eyebrow">PROJECT</div>
           <h1 class="h-sec mt-2">{{ project?.name ?? '-' }}</h1>
           <p class="muted mt-2">{{ project?.image?.original_name ?? '未加载影像' }}</p>
+          <div class="dl mt-4">
+            <dt>模型</dt><dd>{{ project?.transform_type ?? selectedTransform }}</dd>
+            <dt>CRS</dt><dd>{{ project?.target_crs ?? targetCrs }}</dd>
+            <dt>RMS</dt><dd>{{ formatMeters(project?.rms_meters ?? rmsMeters) }}</dd>
+          </div>
         </section>
         <section class="col-sec">
           <div class="eyebrow">LAYERS</div>
@@ -784,7 +816,10 @@ watch(previewOpacity, () => {
           </div>
           <div v-if="error" class="callout danger"><SvgIcon name="warn" :size="18" />{{ error }}</div>
           <div v-else-if="message" class="callout ok"><SvgIcon name="check" :size="18" />{{ message }}</div>
-          <div v-else class="callout"><SvgIcon name="info" :size="18" />推荐使用 4-10 个均匀分布的控制点。</div>
+          <div v-else class="callout">
+            <SvgIcon name="info" :size="18" />
+            当前模型至少需要 {{ selectedTransformMinimum }} 个启用控制点。
+          </div>
         </section>
       </aside>
     </main>
@@ -820,6 +855,12 @@ watch(previewOpacity, () => {
   gap: 8px;
   font-weight: 600;
   font-size: var(--text-sm);
+}
+.transform-select {
+  width: 148px;
+  height: 32px;
+  padding: 6px 10px;
+  font-size: var(--text-xs);
 }
 .wb-body {
   flex: 1;

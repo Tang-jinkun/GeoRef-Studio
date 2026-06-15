@@ -9,8 +9,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.gis.geotiff import DEFAULT_CRS
-from app.gis.geotiff import write_geotiff
 from app.models.export_artifact import ExportArtifact
 from app.models.project import Project
 
@@ -34,16 +32,16 @@ def _get_project_or_404(db: Session, project_id: UUID) -> Project:
 
 def export_geotiff(db: Session, project_id: UUID) -> ExportArtifact:
     project = _get_project_or_404(db, project_id)
-    if not project.transform_matrix:
+    if not project.georef_result_path:
         raise HTTPException(status_code=400, detail="Project is not georeferenced")
 
-    source_path = Path(project.image_path)
+    source_path = Path(project.georef_result_path)
     if not source_path.exists():
-        raise HTTPException(status_code=404, detail="Source image file not found")
+        raise HTTPException(status_code=404, detail="Georeferenced raster file not found")
 
     file_name = f"{project.id}_{uuid4().hex[:8]}.tif"
     output_path = _outputs_dir(project.id) / file_name
-    write_geotiff(source_path, output_path, project.transform_matrix, DEFAULT_CRS)
+    shutil.copyfile(source_path, output_path)
 
     artifact = ExportArtifact(
         project_id=project.id,

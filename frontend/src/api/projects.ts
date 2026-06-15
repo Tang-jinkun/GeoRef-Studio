@@ -11,6 +11,10 @@ export type Project = {
   status: string
   transform_matrix: number[][] | null
   rms_error: number | null
+  transform_type: string | null
+  target_crs: string | null
+  rms_meters: number | null
+  georef_result_path: string | null
   georef_time: string | null
   create_time: string
   update_time: string

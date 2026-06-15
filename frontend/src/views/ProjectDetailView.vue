@@ -8,7 +8,7 @@ import { imageFileUrl } from '@/api/images'
 import { deleteProject, getProject, type Project } from '@/api/projects'
 import AppBar from '@/components/AppBar.vue'
 import SvgIcon from '@/components/SvgIcon.vue'
-import { formatDate, formatNumber, formatSize, statusBadgeClass } from '@/utils/format'
+import { formatDate, formatSize, statusBadgeClass } from '@/utils/format'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +20,13 @@ const error = ref('')
 
 const projectId = computed(() => String(route.params.id))
 const enabledCount = computed(() => controlPoints.value.filter((point) => point.enabled).length)
+
+function formatMeters(value: number | null | undefined) {
+  if (value === null || value === undefined) return '-'
+  if (Math.abs(value) >= 1000) return `${(value / 1000).toFixed(2)} km`
+  if (Math.abs(value) >= 10) return `${value.toFixed(1)} m`
+  return `${value.toFixed(2)} m`
+}
 
 async function load() {
   loading.value = true
@@ -144,24 +151,24 @@ onMounted(() => {
             <div class="panel">
               <div class="panel-head">
                 <h3 class="h-sec">配准信息</h3>
-                <span class="badge accent transform-badge">Affine Transformation</span>
+                <span class="badge accent transform-badge">{{ project.transform_type ?? '未配准' }}</span>
               </div>
               <div class="panel-body">
                 <div class="stat-row">
                   <div class="stat"><div class="k">控制点数量</div><div class="v">{{ controlPoints.length }}<small> / 启用 {{ enabledCount }}</small></div></div>
-                  <div class="stat"><div class="k">当前 RMS</div><div class="v accent">{{ formatNumber(project.rms_error, 6) }}</div></div>
+                  <div class="stat"><div class="k">当前 RMS</div><div class="v accent">{{ formatMeters(project.rms_meters) }}</div></div>
                   <div class="stat"><div class="k">GeoTIFF</div><div class="v">{{ artifacts.length ? '已生成' : '未生成' }}</div></div>
                   <div class="stat"><div class="k">配准时间</div><div class="v stat-date">{{ formatDate(project.georef_time) }}</div></div>
                 </div>
-                <div class="callout mt-4" :class="project.rms_error !== null ? 'ok' : 'warn'">
-                  <SvgIcon :name="project.rms_error !== null ? 'check' : 'warn'" :size="18" />
+                <div class="callout mt-4" :class="project.rms_meters !== null ? 'ok' : 'warn'">
+                  <SvgIcon :name="project.rms_meters !== null ? 'check' : 'warn'" :size="18" />
                   <span>
                     {{
-                      project.rms_error !== null
-                        ? `配准完成，RMS = ${formatNumber(project.rms_error, 6)}。可导出 GeoTIFF。`
+                      project.rms_meters !== null
+                        ? `配准完成，${project.transform_type ?? '未知模型'}，RMS = ${formatMeters(project.rms_meters)}。可导出 GeoTIFF。`
                         : enabledCount >= 3
-                          ? '已满足最低控制点要求，可进入工作台执行 Affine 配准。'
-                          : 'Affine 配准最少需要 3 个启用控制点。'
+                          ? '已满足最低控制点要求，可进入工作台执行配准。'
+                          : '配准最少需要 3 个启用控制点。'
                     }}
                   </span>
                 </div>
