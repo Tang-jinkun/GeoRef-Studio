@@ -178,6 +178,13 @@ function formatMeters(value: number | null | undefined) {
   return `${value.toFixed(2)} m`
 }
 
+function georefErrorMessage(exception: unknown) {
+  const response = (exception as { response?: { data?: { detail?: unknown } } }).response
+  const detail = response?.data?.detail
+  if (typeof detail === 'string' && detail.trim()) return `配准失败：${detail}`
+  return `配准失败，当前模型至少需要 ${selectedTransformMinimum.value} 个启用控制点。`
+}
+
 async function loadBoundaryGeoJson() {
   if (!selectedBoundaryId.value) {
     boundaryGeoJson.value = null
@@ -719,8 +726,8 @@ async function executeGeoref() {
     await load()
     await loadPreview()
     renderResidualLayer()
-  } catch {
-    error.value = '配准失败，至少需要 3 个启用控制点。'
+  } catch (exception) {
+    error.value = georefErrorMessage(exception)
   } finally {
     running.value = false
   }

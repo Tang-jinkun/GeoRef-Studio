@@ -159,7 +159,6 @@ def _warp_projective(
 
     with rasterio.open(source_path) as source:
         source_data = source.read()
-        source_profile = source.profile.copy()
         source_height = source.height
         source_width = source.width
 
@@ -223,8 +222,7 @@ def _warp_projective(
     else:
         output_data = np.moveaxis(warped, -1, 0)
 
-    profile = source_profile.copy()
-    profile.update(
+    profile = dict(
         driver="GTiff",
         height=output_height,
         width=output_width,
